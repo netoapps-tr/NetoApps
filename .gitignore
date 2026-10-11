@@ -56,3 +56,4 @@ releases/
 node_modules/
 neto_flutter/
 web/
+android_client/.gradle/
