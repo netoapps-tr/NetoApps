@@ -1,0 +1,27 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.netops.mobile'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.netops.mobile'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.39.0-mobile'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    dependencies {
+        implementation 'androidx.core:core:1.13.1'
+        implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+        implementation 'com.google.zxing:core:3.5.3'
+    }
+}

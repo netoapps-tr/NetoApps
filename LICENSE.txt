@@ -1,0 +1,57 @@
+NETOPS ÖZEL YAZILIM LİSANSI
+
+Telif hakkı (c) 2026 netoapps-tr. Tüm hakları saklıdır.
+
+Bu lisans; NetOps yazılımı, çalıştırılabilir dosyaları, kaynak kodları,
+arayüz tasarımları, logoları, görselleri, belgeleri ve ilgili tüm dosyalar
+(birlikte "Yazılım" olarak anılır) için geçerlidir.
+
+1. Sınırlı kullanım izni
+
+Yazılımı edinen kişiye, Yazılımı kişisel veya kurum içi amaçlarla kurması ve
+kullanması için sınırlı, münhasır olmayan ve devredilemez bir kullanım izni
+verilir.
+
+2. Yasaklanan işlemler
+
+Telif hakkı sahibinin önceden yazılı izni olmadan aşağıdaki işlemler yapılamaz:
+
+- Yazılım kopyalanamaz, yayımlanamaz, yüklenemez veya yeniden dağıtılamaz.
+- Yazılım değiştirilemez, uyarlanamaz, çevrilemez veya türevi oluşturulamaz.
+- Yazılım satılamaz, kiralanamaz, lisanslanamaz veya ticari olarak işletilemez.
+- Yazılımın kaynak kodunu çıkarmaya yönelik tersine mühendislik, derleme
+  çözme veya parçalarına ayırma işlemleri yapılamaz. Bu kural, yürürlükteki
+  yasaların açıkça izin verdiği durumlar için geçerli değildir.
+- Telif hakkı, marka, lisans veya kaynak gösterme bildirimleri kaldırılamaz.
+- NetOps adı, logoları veya marka unsurları resmi ortaklık izlenimi verecek
+  şekilde kullanılamaz.
+
+3. Mülkiyet
+
+Yazılım satılmaz, lisanslanır. Fikri mülkiyet haklarının tamamı telif hakkı
+sahibine ve ilgili lisans sahiplerine aittir. Bu lisans mülkiyet devretmez.
+
+4. Üçüncü taraf bileşenleri
+
+Yazılım, kendi lisanslarıyla dağıtılan üçüncü taraf bileşenlerini kullanabilir.
+Bu bileşenler kendi lisans koşullarına tabi olmaya devam eder.
+
+5. Garanti verilmemesi
+
+YAZILIM "OLDUĞU GİBİ" SUNULUR. AÇIK VEYA ZIMNİ HİÇBİR GARANTİ VERİLMEZ.
+YÜRÜRLÜKTEKİ YASALARIN İZİN VERDİĞİ EN GENİŞ ÖLÇÜDE, TELİF HAKKI SAHİBİ
+YAZILIMIN KULLANIMINDAN DOĞAN ZARARLARDAN VEYA TALEPLERDEN SORUMLU DEĞİLDİR.
+
+6. Lisansın sona ermesi
+
+Bu lisansın önemli bir hükmü ihlal edilirse kullanım izni otomatik olarak sona
+erer. Bu durumda Yazılımın kullanımı durdurulmalı ve kontrol edilen kopyalar
+silinmelidir. Yasal olarak saklanması gereken kopyalar bu hükmün dışındadır.
+
+7. İletişim
+
+İzin talepleri ve lisans soruları için resmi NetOps proje kanalları üzerinden
+telif hakkı sahibiyle iletişime geçilmelidir.
+
+Bu metin pratik bir yazılım lisansı şablonudur. Özel hukuki durumlar için
+yetkili bir hukuk uzmanından görüş alınması önerilir.

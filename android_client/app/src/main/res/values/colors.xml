@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="netops_background">#08090D</color>
+    <color name="netops_surface">#12151C</color>
+    <color name="netops_surface_alt">#191D26</color>
+    <color name="netops_stroke">#2B3342</color>
+    <color name="netops_accent">#4F7CFF</color>
+    <color name="netops_accent_pressed">#3C68E6</color>
+    <color name="netops_text">#F4F7FB</color>
+    <color name="netops_muted">#8E9AAF</color>
+</resources>

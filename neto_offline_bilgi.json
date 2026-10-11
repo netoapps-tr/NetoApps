@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "replies": {
+    "minecraft nedir": "Minecraft, bloklarla inşa yapabildiğin ve hayatta kalmaya çalıştığın sandbox oyunudur.",
+    "netops nedir": "NetOps, bu bilgisayarda çalışan kişisel asistan ve araç merkezidir.",
+    "sen kimsin": "Ben NetOps, bu bilgisayardaki kişisel asistanınım.",
+    "seni kim yaptı": "Beni bu proje içinde beraber geliştirdiniz; ben NetOps çekirdeğiyle çalışıyorum."
+  },
+  "tips": [
+    "İstersen 'kendini onar' yazarak yerel onarım başlatabilirsin.",
+    "İstersen 'internet kapat' yazarak cevapları daha offline tutabilirsin.",
+    "Program açma komutlarında net isim yazarsan daha hızlı davranırım."
+  ]
+}

@@ -1,0 +1,127 @@
+============================================================
+ NETOPS ASISTAN - ARKADASINIZ ICIN KURULUM NOTU
+============================================================
+
+ONCE SU OKUYUN
+--------------
+Bu klasordeki ".py" uzantili dosyalar BIR PROGRAM DEGILDIR.
+Onlar programin kaynak kodudur. Tek basina cift tiklamakla
+CALISMAZLAR. Calismalari icin bilgisayarda:
+
+  1) Python yorumlayicisi  (kurulu degilse)
+  2) Yaklasik 24 adet Python kutuphanesi  (toplam 2-3 GB)
+
+bulunmak zorundadir. Temiz bir Windows kurulumunda bunlarin
+HICBIRI yoktur. Bu yuzden "hicbir sey olmuyor" gorunur.
+
+Ek olarak: program kendi hata mesajlarini GIZLER. Acilirken
+konsolu kapatip hatalari su dosyaya yazar:
+
+    logs\terminal_detached.log
+
+Yani hata olsa bile ekranda hicbir sey gorunmez. Bosuna
+"cift tikladim, bir sey olmadi" durumu yasanir.
+
+
+============================================================
+COZUM 1  -  EN KOLAY: HAZIR PAKETI KULLANIN (ONERILEN)
+============================================================
+
+Python kurmaya hic gerek yok. Klasorde hazir surumler var:
+
+  dist\NetOps.exe           (~224 MB, tasinabilir, kurulum yok)
+  Output\Netops Setup.exe   (~266 MB, kurulum sihirbazi)
+
+Bunlar Python'u ve tum kutuphaneleri ICINDE tasir.
+Cift tiklayin, acilir.
+
+Dikkat edilecek noktalar:
+
+  * Dosya imzali (dijital olarak) DEGILDIR. Windows ilk
+    acilista "Windows korumali bilgisayariniz" uyarisi
+    verebilir:
+        -> "Ek bilgi"  ->  "Yine de calistir"
+    Bu normaldir, her imzasiz programda olur.
+
+  * Antivirus / Defender bu tur programlari (PC kontrol
+    edebilen, uzaktan komut alan) yanlislikla karantinaya
+    alabilir. Dosya kaybolursa "Karantinadan geri yukle"
+    deyip istisna ekleyin.
+
+  * .exe dosyalari e-posta (Gmail) ve WhatsApp uzerinden
+    GONDERILEMEZ - engellenir. Buyuk dosya servisi
+    kullanin (Google Drive, WeTransfer, Yandex Disk) veya
+    kendi GitHub Releases sayfanizi kullanin.
+
+  * Ilk acilis yavastir (buyuk dosya gecici klasore
+    cikarilir). 30-60 saniye bekleyin, hemen kapatmayin.
+
+
+============================================================
+COZUM 2  -  KAYNAK KODU (.py) CALISTIRMAK ISTIYORSANIZ
+============================================================
+
+1) Python kurun:  https://www.python.org/downloads/
+
+   ONEMLI: 3.12 veya 3.13 surumunu secin.
+           3.14 ONERILMEZ - bazi kutuphanelerin hazir
+           (on-derlenmis) paketi henuz yoktur.
+
+   Kurulum ekraninda ALTTAKI KUTUYU ISARETLEYIN:
+       [x] Add python.exe to PATH
+
+2) Bilgisayari yeniden baslatin.
+
+3) Bu klasordeki su dosyayi cift tiklayin:
+
+       ARKADAS_BASLAT.bat
+
+   Bu dosya:
+     - Python'u bulur,
+     - eksik kutuphaneleri sorup kurar,
+     - programi HATA MESAJLARI GORUNECEK sekilde baslatir.
+
+   Paket kurulumu 2-3 GB indirir ve uzun surebilir.
+   Sabirla bekleyin, pencereyi kapatmayin.
+
+4) Bir hata cikarsa, o penceredeki mesaji kopyalayip
+   gelistiriciye gonderin. Hata metni olmadan sorun
+   tespit edilemez.
+
+
+============================================================
+SORUN GIDERME - KISA LISTE
+============================================================
+
+"Cift tikliyorum, hicbir sey olmuyor"
+    -> Python yok. Cozum 1'i kullanin (hazir exe).
+       Ya da ARKADAS_BASLAT.bat calistirip ekrandaki
+       mesaji okuyun.
+
+"Siyah pencere acilip hemen kapaniyor"
+    -> Hata var ama gizleniyor. ARKADAS_BASLAT.bat
+       kullanin; pencereyi acik tutar.
+
+"Windows korumali bilgisayariniz diyor"
+    -> Imzasiz program uyarisi. "Ek bilgi" ->
+       "Yine de calistir".
+
+"Dosya kayboldu / silindi"
+    -> Antivirus karantinaya aldi. Karantinadan geri
+       yukleyip istisna ekleyin.
+
+"Python'u kurdum ama yine olmuyor"
+    -> Kurulumda "Add python.exe to PATH" isaretlenmemis
+       olabilir. Python'u kaldirip yeniden kurun ve
+       kutuyu isaretleyin.
+
+"pip install hata veriyor"
+    -> Python 3.14 kullaniyor olabilirsiniz. 3.12/3.13
+       surumune gecin.
+
+Program acildi ama bazi ozellikler yok
+    -> Bazi ozellikler ek kurulum ister: adb
+       (Android), Ollama (AI), Piper (ses). Bunlar
+       opsiyoneldir, program onlarsiz da acilir.
+
+============================================================

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "assistant_name": "NetOps",
+  "mode": "normal",
+  "startup_message": "Hazirim.",
+  "replies": {
+    "selam": [
+      "aleykümselam"
+    ]
+  },
+  "web_commands": {},
+  "app_commands": {}
+}

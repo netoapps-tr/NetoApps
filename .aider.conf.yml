@@ -1,0 +1,7 @@
+dark-mode: true
+auto-commits: false
+dirty-commits: false
+attribute-author: false
+attribute-committer: false
+read:
+  - AIDER_NETOPS_NOTES.md
