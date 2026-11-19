@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 APP_NAME = "Neto Update Center"
 APP_SHORT_NAME = "NUC"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.1.0"
 REPOSITORY = "netoapps-tr/NetoApps"
 REPOSITORY_URL = f"https://github.com/{REPOSITORY}"
 RELEASES_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"
@@ -353,62 +353,76 @@ def _open_folder(path: str) -> None:
 class UpdateCenterApp:
     def __init__(self, root: Any) -> None:
         import tkinter as tk
+        from tkinter import ttk
 
         self.root = root
         self.tk = tk
+        self.ttk = ttk
         self.root.title(f"NUC | {APP_NAME}")
-        self.root.geometry("760x560")
-        self.root.minsize(620, 440)
-        self.root.configure(bg="#0d1117")
+        self.root.geometry("760x430")
+        self.root.minsize(640, 360)
+        try:
+            ttk.Style(self.root).theme_use("vista")
+        except tk.TclError:
+            pass
         self.catalog: dict[str, dict[str, Any]] = {}
         self.installed: list[dict[str, str]] = []
         self.status_var = tk.StringVar(value="GitHub merkezi kontrol ediliyor...")
-        self.cards = tk.Frame(root, bg="#0d1117")
+        self.details_var = tk.StringVar(value="")
+        self.container = ttk.Frame(root, padding=16)
+        self.container.pack(fill="both", expand=True)
         self._build_header()
-        self.cards.pack(fill="both", expand=True, padx=22, pady=(8, 12))
-        self.status_label = tk.Label(
+        content = ttk.Frame(self.container)
+        content.pack(fill="both", expand=True, pady=(16, 8))
+        columns = ("product", "installed", "latest", "status")
+        self.table = ttk.Treeview(content, columns=columns, show="headings", height=7)
+        headings = {
+            "product": "Program",
+            "installed": "Kurulu sürüm",
+            "latest": "GitHub sürümü",
+            "status": "Durum",
+        }
+        widths = {"product": 190, "installed": 170, "latest": 150, "status": 180}
+        for column in columns:
+            self.table.heading(column, text=headings[column])
+            self.table.column(column, width=widths[column], anchor="w")
+        self.table.tag_configure("available", foreground="#c62828")
+        self.table.tag_configure("current", foreground="#2e7d32")
+        self.table.tag_configure("unknown", foreground="#6b7280")
+        self.table.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(content, orient="vertical", command=self.table.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.table.configure(yscrollcommand=scrollbar.set)
+        ttk.Label(
+            self.container,
+            textvariable=self.details_var,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", pady=(0, 8))
+        self.status_label = ttk.Label(
             root,
             textvariable=self.status_var,
             anchor="w",
-            bg="#0d1117",
-            fg="#9aa4b2",
-            padx=22,
-            pady=8,
+            padding=(16, 8),
         )
         self.status_label.pack(fill="x")
         self.refresh()
 
     def _build_header(self) -> None:
-        import tkinter as tk
-
-        header = tk.Frame(self.root, bg="#111827", height=78)
+        ttk = self.ttk
+        header = ttk.Frame(self.container)
         header.pack(fill="x")
-        header.pack_propagate(False)
-        tk.Label(header, text="NUC", bg="#111827", fg="#65a7ff", font=("Segoe UI", 22, "bold")).pack(
-            side="left", padx=(22, 12), pady=18
-        )
-        tk.Label(
+        ttk.Label(header, text="NUC", font=("Segoe UI", 16, "bold")).pack(side="left")
+        ttk.Label(
             header,
-            text="Neto Update Center\nMerkezi sürüm ve paket yöneticisi",
-            justify="left",
-            bg="#111827",
-            fg="#eef3f8",
-            font=("Segoe UI", 10),
-        ).pack(side="left", pady=14)
-        self.refresh_button = tk.Button(
+            text="Neto Update Center | Merkezi sürüm kontrolü",
+        ).pack(side="left", padx=(12, 0))
+        self.refresh_button = ttk.Button(
             header,
             text="GitHub'dan kontrol et",
             command=self.refresh,
-            bg="#2563eb",
-            fg="white",
-            activebackground="#3b82f6",
-            activeforeground="white",
-            relief="flat",
-            padx=14,
-            pady=8,
-            cursor="hand2",
         )
-        self.refresh_button.pack(side="right", padx=22)
+        self.refresh_button.pack(side="right")
 
     def refresh(self) -> None:
         self.status_var.set("GitHub merkezi kontrol ediliyor...")
@@ -424,12 +438,11 @@ class UpdateCenterApp:
             self.root.after(0, lambda: self._render({}, [], f"Merkez kontrolü başarısız: {exc}"))
 
     def _render(self, catalog: dict[str, dict[str, Any]], installed: list[dict[str, str]], status: str) -> None:
-        import tkinter as tk
-
         self.catalog = catalog
         self.installed = installed
-        for child in self.cards.winfo_children():
-            child.destroy()
+        for item in self.table.get_children():
+            self.table.delete(item)
+        details: list[str] = []
         for product_id in ("netops", "neto_asistan"):
             latest = catalog.get(product_id)
             matches = [item for item in installed if item["product_id"] == product_id]
@@ -437,9 +450,6 @@ class UpdateCenterApp:
             installed_version = installed_item.get("version", "") if installed_item else ""
             latest_version = latest.get("version", "") if latest else ""
             state = update_state(product_id, installed_version, latest_version) if latest else "unknown"
-            dot_color = {"available": "#ef4444", "current": "#22c55e"}.get(state, "#94a3b8")
-            card = tk.Frame(self.cards, bg="#151b24", highlightbackground="#2b384a", highlightthickness=1)
-            card.pack(fill="x", pady=8)
             title = PRODUCT_LABELS[product_id]
             installed_text = (
                 installed_item.get("display_version") or installed_item.get("version")
@@ -447,34 +457,25 @@ class UpdateCenterApp:
                 else "Kurulu değil"
             )
             latest_text = latest["version"] if latest else "Bulunamadı"
-            title_frame = tk.Frame(card, bg="#151b24")
-            title_frame.grid(row=0, column=0, sticky="w", padx=16, pady=(14, 2))
-            tk.Label(title_frame, text="●", bg="#151b24", fg=dot_color, font=("Segoe UI", 13, "bold")).pack(side="left", padx=(0, 8))
-            tk.Label(title_frame, text=title, bg="#151b24", fg="#f3f6fa", font=("Segoe UI", 13, "bold")).pack(side="left")
-            tk.Label(
-                card,
-                text=f"Kurulu sürüm: {installed_text}    GitHub sürümü: {latest_text}",
-                bg="#151b24",
-                fg="#aab5c4",
-                font=("Segoe UI", 10),
-            ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 2))
             status_text = {
                 "available": "Güncelleme var",
                 "current": "Güncel",
                 "unknown": "Kurulu sürüm karşılaştırılamadı",
             }.get(state, "GitHub paketi bulunamadı")
-            tk.Label(card, text=status_text, bg="#151b24", fg=dot_color, font=("Segoe UI", 10, "bold")).grid(
-                row=2, column=0, sticky="w", padx=16, pady=(0, 2)
-            )
             detail = "Kurulu uygulama bulunamadı."
             if installed_item:
                 detail = installed_item["path"]
             if product_id == "neto_asistan":
                 detail += "\nMinimum destek: Neto Asistan 10.36"
-            tk.Label(card, text=detail, justify="left", anchor="w", bg="#151b24", fg="#7f8da1", font=("Segoe UI", 9)).grid(
-                row=3, column=0, sticky="w", padx=16, pady=(0, 14)
+            dot = "●" if state == "available" else "○"
+            self.table.insert(
+                "",
+                "end",
+                values=(title, installed_text, latest_text, f"{dot} {status_text}"),
+                tags=(state,),
             )
-            card.columnconfigure(0, weight=1)
+            details.append(f"{title}: {detail}")
+        self.details_var.set("\n".join(details))
         self.status_var.set(status)
         self.refresh_button.configure(state="normal")
 
