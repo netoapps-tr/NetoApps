@@ -17,11 +17,11 @@ if str(PROJECT) not in sys.path:
 
 
 class SourceInvariantTests(unittest.TestCase):
-    def test_release_source_is_1_52(self) -> None:
+    def test_release_source_is_1_53(self) -> None:
         from neto_version import APP_VERSION, RELEASE_TAG
 
-        self.assertEqual(APP_VERSION, "1.52.0")
-        self.assertEqual(RELEASE_TAG, "v1.52.0")
+        self.assertEqual(APP_VERSION, "1.53.0")
+        self.assertEqual(RELEASE_TAG, "v1.53.0")
 
     def test_titlebar_uses_asynchronous_windows_message(self) -> None:
         source = (PROJECT / "asistan beta.py").read_text(encoding="utf-8-sig")
@@ -160,6 +160,76 @@ class RuntimeUnitTests(unittest.TestCase):
 
 
 class UpdaterHardeningTests(unittest.TestCase):
+    def test_system_manifest_never_offers_an_older_version(self) -> None:
+        import neto_system_updater as updater
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            changed = root / "neto_settings_page.py"
+            changed.write_text("local\n", encoding="utf-8")
+            manifest = {
+                "manifest_version": "1",
+                "version": "1.42.0",
+                "release_tag": "v1.42.0",
+                "files": [
+                    {
+                        "path": "neto_settings_page.py",
+                        "url": "https://raw.githubusercontent.com/netoapps-tr/NetoApps/main/neto_settings_page.py",
+                        "sha256": "a" * 64,
+                    }
+                ],
+            }
+            with patch.object(updater, "project_root", return_value=root), patch.object(
+                updater, "fetch_manifest", return_value=manifest
+            ), patch.object(updater, "_current_version", return_value="1.53.0"):
+                result = updater.check_for_updates(force=True)
+
+            self.assertFalse(result["available"])
+            self.assertEqual(result["system_files"], [])
+            self.assertIn("eski", result["message"].casefold())
+
+    def test_stale_system_manifest_does_not_hide_new_release(self) -> None:
+        import neto_updater
+
+        stale_manifest_result = {
+            "manifest_ok": True,
+            "available": False,
+            "update_available": False,
+            "is_available": False,
+            "update_mode": "system_files",
+            "current_version": "1.53.0",
+            "latest_version": "1.42.0",
+            "system_files": [],
+        }
+        release = {
+            "release_id": "release-154",
+            "id": "release-154",
+            "tag_name": "v1.54.0",
+            "latest_version": "1.54.0",
+            "name": "NetOps 1.54",
+            "body": "Yeni sürüm",
+            "html_url": "https://github.com/netoapps-tr/NetoApps/releases/tag/v1.54.0",
+            "prerelease": False,
+        }
+        asset = {
+            "id": "asset-154",
+            "name": "NetOps-1.54.exe",
+            "browser_download_url": "https://github.com/netoapps-tr/NetoApps/releases/download/v1.54/NetOps-1.54.exe",
+            "size": 10,
+            "content_type": "application/vnd.microsoft.portable-executable",
+            "digest": "sha256:" + "b" * 64,
+        }
+        with patch.dict(neto_updater._CACHE, {"at": 0.0, "result": None}), patch(
+            "neto_system_updater.check_for_updates", return_value=stale_manifest_result
+        ), patch.object(neto_updater, "get_current_version", return_value="1.53.0"), patch.object(
+            neto_updater, "_fetch_releases", return_value=[release]
+        ), patch.object(neto_updater, "_fetch_assets", return_value=[asset]):
+            result = neto_updater.check_for_updates(force=True)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["latest_version"], "1.54.0")
+        self.assertEqual(result["asset_name"], "NetOps-1.54.exe")
+
     def test_update_root_can_fall_back_when_temp_is_unavailable(self) -> None:
         import neto_updater
 

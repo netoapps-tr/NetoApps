@@ -175,8 +175,22 @@ def check_for_updates(force: bool = False, manifest_url: str | None = None) -> d
             local = project_root() / Path(item["path"])
             if not local.is_file() or _sha256(local) != item["sha256"]:
                 changed.append({**item, "current_path": str(local), "available": True})
-        version_available = _version_tuple(manifest["version"]) > _version_tuple(current_version)
-        available = bool(changed) and (version_available or bool(changed))
+        manifest_version = str(manifest.get("version") or "0.0.0")
+        version_available = _version_tuple(manifest_version) >= _version_tuple(current_version)
+        if version_available:
+            update_files = changed
+            available = bool(update_files)
+            message = (
+                f"{len(update_files)} sistem dosyasi icin guncelleme hazir."
+                if available else "Sistem dosyalari guncel."
+            )
+        else:
+            # A stale manifest must never overwrite a newer installation.
+            update_files = []
+            available = False
+            message = (
+                f"Eski sistem manifesti yok sayildi: {manifest_version} < {current_version}."
+            )
         return {
             "ok": True,
             "manifest_ok": True,
@@ -185,18 +199,15 @@ def check_for_updates(force: bool = False, manifest_url: str | None = None) -> d
             "update_available": available,
             "is_available": available,
             "current_version": current_version,
-            "latest_version": manifest["version"],
+            "latest_version": manifest_version,
             "tag_name": manifest["release_tag"],
-            "system_files": changed,
-            "file_count": len(changed),
+            "system_files": update_files,
+            "file_count": len(update_files),
             "verified": True,
             "download_url": "",
             "asset_digest": "",
             "body": str(manifest.get("notes") or ""),
-            "message": (
-                f"{len(changed)} sistem dosyasi icin guncelleme hazir."
-                if available else "Sistem dosyalari guncel."
-            ),
+            "message": message,
             "error": "",
         }
     except Exception as exc:
@@ -228,6 +239,12 @@ def download_files(
     files = update.get("system_files") if isinstance(update, dict) else None
     if not isinstance(files, list) or not files:
         raise RuntimeError("Indirilecek degisen sistem dosyasi yok.")
+    current_version = _current_version()
+    update_version = str(update.get("latest_version") or update.get("version") or "0.0.0")
+    if _version_tuple(update_version) < _version_tuple(current_version):
+        raise RuntimeError(
+            f"Eski NetOps surumu guncelleme olarak kurulamaz: {update_version} < {current_version}."
+        )
     job = update_root() / f"system-job-{os.getpid()}-{uuid.uuid4().hex}"
     payload = job / "payload"
     payload.mkdir(parents=True, exist_ok=False)
@@ -286,6 +303,12 @@ def install_downloaded(plan_path: str, restart: bool = True) -> dict[str, Any]:
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
     if plan.get("update_mode") != "system_files":
         raise ValueError("Sistem guncelleme plani gecersiz.")
+    current_version = _current_version()
+    update_version = str(plan.get("version") or "0.0.0")
+    if _version_tuple(update_version) < _version_tuple(current_version):
+        raise RuntimeError(
+            f"Eski NetOps surumu kurulamaz: {update_version} < {current_version}."
+        )
     from neto_update_helper import install_file_update
     return install_file_update(plan, restart=restart, plan_path=plan_path)
 

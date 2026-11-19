@@ -34,7 +34,7 @@ FEED_URL = f"{RELEASES_URL}.atom"
 EXPANDED_ASSETS_URL = f"{REPO_URL}/releases/expanded_assets/{{tag}}"
 NETWORK_TIMEOUT = 18
 CACHE_SECONDS = 15 * 60
-UPDATER_BUILD = "neto-v1.42.0-release"
+UPDATER_BUILD = "neto-v1.53.0-release"
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "result": None}
 _CACHE_LOCK = threading.RLock()
@@ -408,7 +408,7 @@ def _fetch_assets(tag: str) -> List[Dict[str, Any]]:
 def _pick_asset(assets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not assets:
         return None
-    priority = {".zip": 0, ".exe": 1, ".msi": 2}
+    priority = {".exe": 0, ".msi": 1, ".zip": 2}
     ranked = sorted(
         assets,
         key=lambda item: (
@@ -459,37 +459,32 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
 
     current = get_current_version()
     state = load_state()
-    # The 1.42 channel is file-level only. If its manifest is unavailable,
-    # report that state instead of silently downloading a full program.
+    # Prefer the file-level path only when its manifest belongs to this
+    # release train. Otherwise continue to the public EXE Release check.
     try:
         from neto_system_updater import check_for_updates as check_system_updates
 
         system_result = check_system_updates(force=force)
         if system_result.get("manifest_ok"):
-            state["last_check_at"] = int(now)
-            state["last_error"] = ""
-            save_state(state)
-            with _CACHE_LOCK:
-                _CACHE["at"] = now
-                _CACHE["result"] = dict(system_result)
-            return system_result
-        return system_result
-    except Exception as exc:
-        return {
-            "available": False,
-            "update_available": False,
-            "is_available": False,
-            "update_mode": "system_files",
-            "manifest_ok": False,
-            "current_version": current,
-            "latest_version": current,
-            "tag_name": "",
-            "system_files": [],
-            "verified": False,
-            "download_url": "",
-            "error": str(exc),
-            "message": f"Sistem guncellemesi kontrol edilemedi: {exc}",
-        }
+            system_latest = _comparison_version_tuple(system_result.get("latest_version"))
+            current_tuple = _comparison_version_tuple(current)
+            # Use the file-level path only for the current release train. A
+            # stale manifest must not hide a newer GitHub executable release.
+            if system_result.get("available") or (
+                system_latest and current_tuple and system_latest >= current_tuple
+            ):
+                state["last_check_at"] = int(now)
+                state["last_error"] = ""
+                save_state(state)
+                with _CACHE_LOCK:
+                    _CACHE["at"] = now
+                    _CACHE["result"] = dict(system_result)
+                return system_result
+        # If the file-level manifest is stale or unavailable, continue with
+        # the public Release check instead of hiding a newer EXE release.
+    except Exception:
+        # A manifest failure should not block the public Release check.
+        pass
     try:
         releases = _fetch_releases()
         candidates = [release for release in releases if include_prerelease or not release.get("prerelease")]
@@ -634,7 +629,55 @@ def download_update(
         from neto_system_updater import download_files
 
         return download_files(update, progress_callback=progress_callback)
-    raise RuntimeError("1.42 guncelleme kanali yalnizca degisen sistem dosyalarini kabul eder.")
+    if not update.get("available"):
+        raise RuntimeError("Kullanilabilir yeni NetOps guncellemesi yok.")
+    if not version_is_newer(update.get("latest_version"), get_current_version()):
+        raise RuntimeError("Eski veya ayni NetOps surumu kurulamaz.")
+    url = str(update.get("download_url") or "").strip()
+    if not url:
+        raise RuntimeError("NetOps EXE indirme adresi bulunamadi.")
+    filename = _safe_filename(
+        str(update.get("asset_name") or Path(urllib.parse.urlparse(url).path).name),
+        fallback="NetOps-update.exe",
+    )
+    target_dir = Path(destination).expanduser() if destination else _downloads_dir()
+    if target_dir.suffix:
+        target = target_dir
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.part")
+    digest = hashlib.sha256()
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response, temporary.open("wb") as output:
+            total = int(response.headers.get("Content-Length") or 0)
+            downloaded = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                digest.update(chunk)
+                downloaded += len(chunk)
+                if callable(progress_callback):
+                    try:
+                        progress_callback(downloaded, total)
+                    except TypeError:
+                        progress_callback(downloaded / total if total else 0.0)
+            output.flush()
+            os.fsync(output.fileno())
+        expected = _normalize_digest(update.get("asset_digest")) or _asset_digest(update.get("asset") or {})
+        if expected and digest.hexdigest() != expected:
+            raise RuntimeError("NetOps EXE SHA-256 dogrulamasini gecemedi.")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return str(target)
 
 
 def download_release(*args: Any, **kwargs: Any) -> str:
