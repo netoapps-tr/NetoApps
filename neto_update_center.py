@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 APP_NAME = "Neto Update Center"
 APP_SHORT_NAME = "NUC"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 REPOSITORY = "netoapps-tr/NetoApps"
 REPOSITORY_URL = f"https://github.com/{REPOSITORY}"
 RELEASES_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"
@@ -47,6 +47,21 @@ def version_tuple(value: Any) -> tuple[int, ...]:
 def is_supported_version(product_id: str, value: Any) -> bool:
     minimum = MIN_SUPPORTED_VERSIONS.get(str(product_id or "").strip())
     return bool(minimum and version_tuple(value) >= minimum)
+
+
+def comparison_version_tuple(product_id: str, value: Any) -> tuple[int, ...]:
+    parsed = version_tuple(value)
+    if product_id == "netops" and parsed[0] == 10:
+        return (1, parsed[1], *parsed[2:])
+    return parsed
+
+
+def update_state(product_id: str, installed_version: Any, latest_version: Any) -> str:
+    if not str(installed_version or "").strip() or version_tuple(installed_version) == (0, 0, 0, 0, 0, 0):
+        return "unknown"
+    if comparison_version_tuple(product_id, latest_version) > comparison_version_tuple(product_id, installed_version):
+        return "available"
+    return "current"
 
 
 def _normalize_digest(value: Any) -> str:
@@ -289,6 +304,7 @@ def discover_installed_products() -> list[dict[str, str]]:
             "product_name": PRODUCT_LABELS[product_id],
             "path": str(path.resolve()),
             "version": str(version or _version_from_path(path)),
+            "display_version": str(version or _version_from_path(path) or path.stem),
             "source": source,
         }
         discovered[(product_id, item["path"].casefold())] = item
@@ -350,7 +366,7 @@ class UpdateCenterApp:
         self.cards = tk.Frame(root, bg="#0d1117")
         self._build_header()
         self.cards.pack(fill="both", expand=True, padx=22, pady=(8, 12))
-        tk.Label(
+        self.status_label = tk.Label(
             root,
             textvariable=self.status_var,
             anchor="w",
@@ -358,7 +374,8 @@ class UpdateCenterApp:
             fg="#9aa4b2",
             padx=22,
             pady=8,
-        ).pack(fill="x")
+        )
+        self.status_label.pack(fill="x")
         self.refresh()
 
     def _build_header(self) -> None:
@@ -417,43 +434,46 @@ class UpdateCenterApp:
             latest = catalog.get(product_id)
             matches = [item for item in installed if item["product_id"] == product_id]
             installed_item = matches[0] if matches else None
+            installed_version = installed_item.get("version", "") if installed_item else ""
+            latest_version = latest.get("version", "") if latest else ""
+            state = update_state(product_id, installed_version, latest_version) if latest else "unknown"
+            dot_color = {"available": "#ef4444", "current": "#22c55e"}.get(state, "#94a3b8")
             card = tk.Frame(self.cards, bg="#151b24", highlightbackground="#2b384a", highlightthickness=1)
             card.pack(fill="x", pady=8)
             title = PRODUCT_LABELS[product_id]
-            installed_text = installed_item["version"] if installed_item and installed_item["version"] else "Bilinmiyor"
-            latest_text = latest["version"] if latest else "Bulunamadı"
-            tk.Label(card, text=title, bg="#151b24", fg="#f3f6fa", font=("Segoe UI", 13, "bold")).grid(
-                row=0, column=0, sticky="w", padx=16, pady=(14, 2)
+            installed_text = (
+                installed_item.get("display_version") or installed_item.get("version")
+                if installed_item
+                else "Kurulu değil"
             )
+            latest_text = latest["version"] if latest else "Bulunamadı"
+            title_frame = tk.Frame(card, bg="#151b24")
+            title_frame.grid(row=0, column=0, sticky="w", padx=16, pady=(14, 2))
+            tk.Label(title_frame, text="●", bg="#151b24", fg=dot_color, font=("Segoe UI", 13, "bold")).pack(side="left", padx=(0, 8))
+            tk.Label(title_frame, text=title, bg="#151b24", fg="#f3f6fa", font=("Segoe UI", 13, "bold")).pack(side="left")
             tk.Label(
                 card,
-                text=f"Kurulu: {installed_text}    Merkez: {latest_text}",
+                text=f"Kurulu sürüm: {installed_text}    GitHub sürümü: {latest_text}",
                 bg="#151b24",
                 fg="#aab5c4",
                 font=("Segoe UI", 10),
             ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 2))
+            status_text = {
+                "available": "Güncelleme var",
+                "current": "Güncel",
+                "unknown": "Kurulu sürüm karşılaştırılamadı",
+            }.get(state, "GitHub paketi bulunamadı")
+            tk.Label(card, text=status_text, bg="#151b24", fg=dot_color, font=("Segoe UI", 10, "bold")).grid(
+                row=2, column=0, sticky="w", padx=16, pady=(0, 2)
+            )
             detail = "Kurulu uygulama bulunamadı."
             if installed_item:
                 detail = installed_item["path"]
             if product_id == "neto_asistan":
                 detail += "\nMinimum destek: Neto Asistan 10.36"
             tk.Label(card, text=detail, justify="left", anchor="w", bg="#151b24", fg="#7f8da1", font=("Segoe UI", 9)).grid(
-                row=2, column=0, sticky="w", padx=16, pady=(0, 14)
+                row=3, column=0, sticky="w", padx=16, pady=(0, 14)
             )
-            action = tk.Button(
-                card,
-                text="Güncellemeyi indir" if latest else "Paket yok",
-                command=lambda item=latest: self._download(item),
-                state="normal" if latest else "disabled",
-                bg="#2563eb",
-                fg="white",
-                activebackground="#3b82f6",
-                activeforeground="white",
-                relief="flat",
-                padx=12,
-                pady=7,
-            )
-            action.grid(row=0, rowspan=3, column=1, padx=16)
             card.columnconfigure(0, weight=1)
         self.status_var.set(status)
         self.refresh_button.configure(state="normal")

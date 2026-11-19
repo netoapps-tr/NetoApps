@@ -15,6 +15,14 @@ if str(PROJECT) not in sys.path:
 
 
 class UpdateCenterTests(unittest.TestCase):
+    def test_update_state_maps_legacy_netops_10x_to_current_1x_train(self) -> None:
+        import neto_update_center as center
+
+        self.assertEqual(center.update_state("netops", "10.37.0", "1.54.0"), "available")
+        self.assertEqual(center.update_state("netops", "1.54.0", "1.54.0"), "current")
+        self.assertEqual(center.update_state("neto_asistan", "10.36", "10.36"), "current")
+        self.assertEqual(center.update_state("neto_asistan", "", "10.36"), "unknown")
+
     def test_catalog_selects_latest_supported_release_per_product(self) -> None:
         import neto_update_center as center
 
