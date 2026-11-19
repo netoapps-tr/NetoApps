@@ -1,0 +1,1 @@
+{"id":"netosecurity","name":"NetoSecurity","version":"1.0.0","entry":"main.py","description":"Eklenti izinleri ve güvenlik denetimi.","permissions":["filesystem_read"]}

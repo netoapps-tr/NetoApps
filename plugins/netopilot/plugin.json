@@ -1,0 +1,13 @@
+{
+  "id": "netopilot",
+  "name": "NetoPilot",
+  "version": "1.0.0",
+  "entry": "main.py",
+  "description": "Bilgisayarı güvenli izinlerle NetOps üzerinden kontrol eder.",
+  "permissions": [
+    "system_status",
+    "program_launch",
+    "window_management",
+    "audio_control"
+  ]
+}

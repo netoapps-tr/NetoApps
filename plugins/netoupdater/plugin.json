@@ -1,0 +1,1 @@
+{"id":"netoupdater","name":"NetoUpdater","version":"1.0.0","entry":"main.py","description":"Güncelleme ve bileşen kontrolü.","permissions":["network","filesystem_write"]}

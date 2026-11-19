@@ -91,11 +91,28 @@ def _open_wsl_shell():
         return False
 
 
+def _virtual_desktop_action(action: str):
+    """Run one fixed virtual-desktop action without accepting raw QEMU args."""
+    try:
+        import neto_virtual_desktop
+
+        result = neto_virtual_desktop.handle_command(f"sanal masaustu {action}")
+        return result or {"ok": False, "state": "ignored", "message": "Sanal masaustu komutu taninmadi."}
+    except Exception as exc:
+        return {"ok": False, "state": "error", "message": f"Sanal masaustu kullanilamadi: {exc}"}
+
+
 def _commands(namespace):
     runtime = get_runtime()
     project = Path(namespace.get("__file__", Path.cwd())).resolve().parent
 
     commands = [
+        {
+            "id": "power_center",
+            "title": "NetOps Güç Merkezi'ni aç",
+            "keywords": "power center güç merkezi açık kaynak araçlar entegrasyon",
+            "action": lambda: __import__("neto_power_features").open_power_center(runtime.root, namespace),
+        },
         {
             "id": "quick_actions",
             "title": "Hızlı İşlemler",
@@ -157,9 +174,27 @@ def _commands(namespace):
             "action": _open_wsl_shell,
         },
         {
+            "id": "virtual_desktop_start",
+            "title": "Sanal masaüstünü başlat",
+            "keywords": "qemu sanal masaüstü sanal masaustu casrev linux",
+            "action": lambda: _virtual_desktop_action("baslat"),
+        },
+        {
+            "id": "virtual_desktop_status",
+            "title": "Sanal masaüstü durumunu göster",
+            "keywords": "qemu sanal masaüstü durum status",
+            "action": lambda: _virtual_desktop_action("durumu"),
+        },
+        {
+            "id": "virtual_desktop_stop",
+            "title": "Sanal masaüstünü durdur",
+            "keywords": "qemu sanal masaüstü durdur kapat",
+            "action": lambda: _virtual_desktop_action("durdur"),
+        },
+        {
             "id": "device_hub",
-            "title": "NETOPS Device Hub'u aç",
-            "keywords": "device hub pairing agent websocket android cihaz merkezi",
+            "title": "Cihazlar sekmesini aç",
+            "keywords": "cihazlar device hub pairing agent websocket android cihaz merkezi",
             "action": lambda: _safe_call(namespace, "neto_device_hub_ac_safe"),
         },
         {
@@ -203,7 +238,43 @@ def _commands(namespace):
             "keywords": "log folder klasör logs",
             "action": lambda: _safe_call(namespace, "neto_logs_klasorunu_ac"),
         },
+        {
+            "id": "power_center_status",
+            "title": "NetOps Güç Merkezi durumunu göster",
+            "keywords": "powertoys flow launcher kde connect localsend syncthing espanso obs keepass rustdesk güç merkezi araçlar",
+            "action": lambda: _power_feature_action(namespace, "status"),
+        },
+        {
+            "id": "capture_screen",
+            "title": "Ekran görüntüsü al",
+            "keywords": "sharex screenshot ekran görüntüsü capture ocr",
+            "action": lambda: _power_feature_action(namespace, "capture"),
+        },
+        {
+            "id": "activity_summary",
+            "title": "Yerel aktivite özetini göster",
+            "keywords": "activitywatch aktivite kullanım istatistik süre",
+            "action": lambda: _power_feature_action(namespace, "activity"),
+        },
     ]
+
+    for app_id, title, keywords in (
+        ("flow_launcher", "Flow Launcher'ı aç", "flow launcher hızlı arama"),
+        ("powertoys", "PowerToys'u aç", "powertoys pencere araçları"),
+        ("kde_connect", "KDE Connect'i aç", "kde connect telefon bildirim pano"),
+        ("localsend", "LocalSend'i aç", "localsend dosya gönder"),
+        ("syncthing", "Syncthing'i aç", "syncthing senkronizasyon"),
+        ("espanso", "Espanso'yu aç", "espanso metin şablonu"),
+        ("obs", "OBS Studio'yu aç", "obs ekran kayıt yayın"),
+        ("keepassxc", "KeePassXC'yi aç", "keepassxc şifre kasa"),
+        ("rustdesk", "RustDesk'i aç", "rustdesk uzak destek"),
+    ):
+        commands.append({
+            "id": f"open_{app_id}",
+            "title": title,
+            "keywords": keywords,
+            "action": lambda current=app_id: _power_feature_action(namespace, "open_app", app_id=current),
+        })
 
     for profile in ("force_fast", "fast", "balanced", "full"):
         commands.append({
@@ -235,6 +306,35 @@ def _run_doctor(project):
         subprocess.Popen([sys.executable, str(doctor), "--project", str(project)], cwd=str(project))
     except Exception:
         pass
+
+
+def _power_feature_action(namespace, action: str, *, app_id: str = ""):
+    """Run one allowlisted power feature and report a compact result."""
+    try:
+        import neto_power_features as power
+
+        if action == "status":
+            report = power.status_report()
+            installed = sum(1 for item in report["integrations"] if item.get("installed"))
+            _safe_call(namespace, "neto_toast_goster", "NetOps Güç Merkezi", f"{installed} dış araç algılandı; yerel özellikler hazır.", "info")
+            return report
+        if action == "capture":
+            result = power.capture_screen()
+            message = result.get("path") if result.get("ok") else result.get("error", "Ekran yakalanamadı.")
+            _safe_call(namespace, "neto_toast_goster", "Ekran Yakalama", str(message), "success" if result.get("ok") else "error")
+            return result
+        if action == "activity":
+            summary = power.activity_summary()
+            message = "Aktivite kaydı kapalı." if not summary else f"{len(summary)} yerel aktivite grubu bulundu."
+            _safe_call(namespace, "neto_toast_goster", "Aktivite Özeti", message, "info")
+            return summary
+        if action == "open_app":
+            result = power.open_optional_app(app_id)
+            _safe_call(namespace, "neto_toast_goster", "NetOps Entegrasyonu", result.get("error", "Uygulama açılıyor."), "success" if result.get("ok") else "info")
+            return result
+    except Exception as exc:
+        _safe_call(namespace, "neto_toast_goster", "NetOps Güç Merkezi", str(exc), "error")
+    return None
 
 
 def open_command_palette(root, namespace):

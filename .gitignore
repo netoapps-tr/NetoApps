@@ -23,6 +23,7 @@ __pycache__/
 *.jpg
 *.jpeg
 *.gif
+!assets/netops_typing.gif
 *.mp4
 *.wav
 *.mp3
@@ -36,6 +37,7 @@ _video_frames/
 now_playing_cache/
 logs/
 runtime/
+models/*.gguf
 payload/
 SİLME/
 SILME/
@@ -57,3 +59,5 @@ node_modules/
 neto_flutter/
 web/
 android_client/.gradle/
+.aider*
+.netops-agent/

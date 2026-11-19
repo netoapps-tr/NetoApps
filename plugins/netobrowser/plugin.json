@@ -1,0 +1,1 @@
+{"id":"netobrowser","name":"NetoBrowser","version":"1.0.0","entry":"main.py","description":"NetOps içi tarayıcı yüzeyi.","permissions":["browser_internal","network"]}

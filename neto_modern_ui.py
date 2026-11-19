@@ -14,27 +14,27 @@ from PIL import Image, ImageDraw
 
 
 _DARK = {
-    "surface": "#202633",
-    "surface_hover": "#2B3548",
-    "surface_border": "#39465E",
-    "primary": "#4F7CFF",
-    "primary_hover": "#6A92FF",
-    "danger": "#A8324B",
-    "danger_hover": "#C44863",
-    "text": "#F3F6FF",
-    "muted": "#B6C0D4",
+    "surface": "#252A33",
+    "surface_hover": "#303742",
+    "surface_border": "#3A4350",
+    "primary": "#60CDFF",
+    "primary_hover": "#7AD8FF",
+    "danger": "#C42B3C",
+    "danger_hover": "#D83B4D",
+    "text": "#F5F7FA",
+    "muted": "#B8C0CC",
 }
 
 _LIGHT = {
-    "surface": "#F2F6FC",
-    "surface_hover": "#E4ECF9",
-    "surface_border": "#C9D6EC",
-    "primary": "#3F68E8",
-    "primary_hover": "#5C82F4",
-    "danger": "#B6374C",
-    "danger_hover": "#D15267",
-    "text": "#172033",
-    "muted": "#5F6D84",
+    "surface": "#FFFFFF",
+    "surface_hover": "#E5E5E5",
+    "surface_border": "#C8C8C8",
+    "primary": "#0067C0",
+    "primary_hover": "#005A9E",
+    "danger": "#C42B3C",
+    "danger_hover": "#A91F2F",
+    "text": "#1A1A1A",
+    "muted": "#5D5D5D",
 }
 
 _INPUT_ICON_CACHE: dict[tuple[str, int, str], ctk.CTkImage] = {}
@@ -246,7 +246,7 @@ def apply_button(
             text_color=text_color,
             border_width=1,
             border_color=border_color,
-            corner_radius=10 if compact else 12,
+            corner_radius=4 if compact else 6,
         )
         button._neto_modernized = True
         button._neto_modern_variant = variant

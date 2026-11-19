@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import inspect
+import json
+import os
 import sys
 import unittest
+import zipfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 
@@ -13,6 +17,12 @@ if str(PROJECT) not in sys.path:
 
 
 class SourceInvariantTests(unittest.TestCase):
+    def test_release_source_is_1_52(self) -> None:
+        from neto_version import APP_VERSION, RELEASE_TAG
+
+        self.assertEqual(APP_VERSION, "1.52.0")
+        self.assertEqual(RELEASE_TAG, "v1.52.0")
+
     def test_titlebar_uses_asynchronous_windows_message(self) -> None:
         source = (PROJECT / "asistan beta.py").read_text(encoding="utf-8-sig")
         self.assertIn("PostMessageW", source)
@@ -52,6 +62,10 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("neto_settings_page", source)
         self.assertIn("neto_agent_worker", source)
 
+    def test_build_includes_local_agent_runner(self) -> None:
+        source = (PROJECT / "BUILD_EXE.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("neto_local_agent_runner", source)
+
     def test_requirements_are_pinned(self) -> None:
         source = (PROJECT / "requirements_live.txt").read_text(encoding="utf-8-sig")
         self.assertIn("customtkinter==6.0.0", source)
@@ -72,6 +86,24 @@ class SourceInvariantTests(unittest.TestCase):
             inspect.signature(neto_update_ui.manual_check).parameters["include_prerelease"].default,
             False,
         )
+
+    def test_legacy_10x_build_can_receive_1x_release(self) -> None:
+        import neto_updater
+
+        self.assertTrue(neto_updater.version_is_newer("1.40", "10.39.0"))
+        self.assertFalse(neto_updater.version_is_newer("1.39", "10.39.0"))
+
+    def test_error_detection_agent_reports_critical_logs(self) -> None:
+        from unittest.mock import patch
+        from neto_error_detection_agent import NetOpsErrorDetectionAgent
+
+        agent = NetOpsErrorDetectionAgent(PROJECT)
+        with patch.object(agent, "_iter_logs", return_value=[PROJECT / "crash.log"]), patch.object(
+            Path, "read_text", return_value="INFO ready\nTraceback (most recent call last):\n"
+        ):
+            report = agent.run()
+        self.assertEqual(report.error_count, 1)
+        self.assertEqual(report.critical_count, 1)
 
 
 class RuntimeUnitTests(unittest.TestCase):
@@ -125,6 +157,166 @@ class RuntimeUnitTests(unittest.TestCase):
         from neto_motion_engine_v2 import interpolate_color
 
         self.assertEqual(interpolate_color("#000000", "#FFFFFF", 0.5), "#808080")
+
+
+class UpdaterHardeningTests(unittest.TestCase):
+    def test_update_root_can_fall_back_when_temp_is_unavailable(self) -> None:
+        import neto_updater
+
+        with TemporaryDirectory() as temp:
+            fallback = Path(temp) / ".neto_updates"
+            with patch.dict(os.environ, {"LOCALAPPDATA": "", "APPDATA": "", "TEMP": "", "TMP": ""}, clear=False), patch.object(
+                neto_updater.Path, "cwd", return_value=Path(temp)
+            ), patch.object(
+                neto_updater, "_can_write_directory", side_effect=lambda path: path == fallback
+            ):
+                # The last candidate is the project working directory fallback.
+                result = neto_updater._update_root()
+            self.assertEqual(result, Path(temp) / ".neto_updates")
+
+    def test_zip_update_script_contains_backup_and_rollback(self) -> None:
+        import neto_update_helper as helper
+
+        with TemporaryDirectory() as temp:
+            base = Path(temp)
+            workspace = base / "updates"
+            app = base / "app"
+            workspace.mkdir()
+            app.mkdir()
+            archive_path = base / "update.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("NetOps/new_file.txt", "new")
+            with patch.object(helper, "_update_root", return_value=workspace), patch.object(
+                helper, "app_root", return_value=app
+            ):
+                script = helper._zip_update_script(archive_path, restart=False, tag="v1.42.0")
+            content = script.read_text(encoding="utf-8-sig")
+            self.assertIn("Backup exit code", content)
+            self.assertIn("restoring previous installation", content)
+            self.assertIn("/PURGE", content)
+            self.assertEqual(len(list(workspace.glob("job-*"))), 1)
+
+    def test_broken_zip_does_not_leave_job_directory(self) -> None:
+        import neto_update_helper as helper
+
+        with TemporaryDirectory() as temp:
+            base = Path(temp)
+            workspace = base / "updates"
+            app = base / "app"
+            workspace.mkdir()
+            app.mkdir()
+            archive_path = base / "unsafe.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("../escape.txt", "blocked")
+            with patch.object(helper, "_update_root", return_value=workspace), patch.object(
+                helper, "app_root", return_value=app
+            ), self.assertRaises(RuntimeError):
+                helper._zip_update_script(archive_path, restart=False)
+            self.assertEqual(list(workspace.glob("job-*")), [])
+
+    def test_system_manifest_rejects_unsafe_paths(self) -> None:
+        import neto_system_updater as updater
+
+        base = {
+            "manifest_version": "1",
+            "version": "1.41.0",
+            "files": [
+                {
+                    "path": "neto_settings_page.py",
+                    "url": "https://raw.githubusercontent.com/netoapps-tr/NetoApps/main/neto_settings_page.py",
+                    "sha256": "a" * 64,
+                }
+            ],
+        }
+        self.assertEqual(updater.validate_manifest(base)["files"][0]["path"], "neto_settings_page.py")
+        for unsafe in ("../escape.py", "NetOps.exe"):
+            payload = {**base, "files": [{**base["files"][0], "path": unsafe}]}
+            with self.assertRaises(ValueError):
+                updater.validate_manifest(payload)
+
+    def test_system_update_plan_contains_only_changed_files(self) -> None:
+        import neto_system_updater as updater
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            unchanged = root / "unchanged.py"
+            changed = root / "changed.py"
+            unchanged.write_bytes(b"same\n")
+            changed.write_bytes(b"old\n")
+            import hashlib
+            manifest = {
+                "manifest_version": "1",
+                "version": "1.41.0",
+                "release_tag": "v1.41.0",
+                "files": [
+                    {
+                        "path": "unchanged.py",
+                        "url": "https://raw.githubusercontent.com/netoapps-tr/NetoApps/main/unchanged.py",
+                        "sha256": hashlib.sha256(b"same\n").hexdigest(),
+                    },
+                    {
+                        "path": "changed.py",
+                        "url": "https://raw.githubusercontent.com/netoapps-tr/NetoApps/main/changed.py",
+                        "sha256": hashlib.sha256(b"new\n").hexdigest(),
+                    },
+                ],
+            }
+            with patch.object(updater, "project_root", return_value=root), patch.object(
+                updater, "fetch_manifest", return_value=manifest
+            ), patch.object(updater, "_current_version", return_value="1.41.0"):
+                result = updater.check_for_updates(force=True)
+            self.assertTrue(result["available"])
+            self.assertEqual([item["path"] for item in result["system_files"]], ["changed.py"])
+
+    def test_full_program_download_is_disabled_for_141_channel(self) -> None:
+        import neto_updater
+
+        with self.assertRaises(RuntimeError):
+            neto_updater.download_update(
+                {
+                    "download_url": "https://github.com/netoapps-tr/NetoApps/releases/download/v1.41.0/NetOps.zip",
+                    "asset_digest": "a" * 64,
+                }
+            )
+
+    def test_file_update_keeps_persistent_rollback_metadata(self) -> None:
+        import neto_update_helper as helper
+
+        with TemporaryDirectory() as temp:
+            base = Path(temp)
+            workspace = base / "updates"
+            app = base / "app"
+            job = workspace / "job"
+            payload = job / "payload"
+            workspace.mkdir()
+            app.mkdir()
+            payload.mkdir(parents=True)
+            staged = payload / "neto_settings_page.py"
+            staged.write_bytes(b"new")
+            plan = {
+                "update_mode": "system_files",
+                "root": str(app),
+                "job": str(job),
+                "version": "1.41.0",
+                "files": [{"path": "neto_settings_page.py", "staged_path": str(staged)}],
+            }
+            with patch.object(helper, "_update_root", return_value=workspace), patch.object(
+                helper.subprocess, "Popen"
+            ) as popen:
+                result = helper.install_file_update(plan, restart=False)
+            metadata = json.loads((job / "rollback.json").read_text(encoding="utf-8"))
+            self.assertTrue(result["ok"])
+            self.assertEqual(metadata["files"], ["neto_settings_page.py"])
+            popen.assert_called_once()
+
+    def test_hidden_rollback_does_nothing_without_verified_history(self) -> None:
+        import neto_system_updater as updater
+
+        with TemporaryDirectory() as temp:
+            with patch.object(updater, "update_root", return_value=Path(temp)):
+                result = updater.hidden_rollback_command("nops-restore-141")
+            self.assertFalse(result["ok"])
+            self.assertIn("onceki", result["message"])
 
     def test_live_commands_do_not_use_a_shell(self) -> None:
         import neto_live_commands

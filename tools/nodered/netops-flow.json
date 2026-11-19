@@ -1,0 +1,101 @@
+[
+  {
+    "id": "netops-tab",
+    "type": "tab",
+    "label": "NetOps Local Automation",
+    "disabled": false,
+    "info": "NetOps için yalnızca yerel ve yapılandırılmış olay akışı."
+  },
+  {
+    "id": "netops-health-in",
+    "type": "http in",
+    "z": "netops-tab",
+    "name": "NetOps health",
+    "url": "/netops/health",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 100,
+    "wires": [["netops-health-function"]]
+  },
+  {
+    "id": "netops-health-function",
+    "type": "function",
+    "z": "netops-tab",
+    "name": "Health response",
+    "func": "msg.payload = { ok: true, service: 'netops-nodered', mode: 'local-rules' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 100,
+    "wires": [["netops-health-out"]]
+  },
+  {
+    "id": "netops-health-out",
+    "type": "http response",
+    "z": "netops-tab",
+    "name": "Health response",
+    "statusCode": "",
+    "headers": {},
+    "x": 570,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "netops-event-in",
+    "type": "http in",
+    "z": "netops-tab",
+    "name": "NetOps event",
+    "url": "/netops/event",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 200,
+    "wires": [["netops-json", "netops-event-function"]]
+  },
+  {
+    "id": "netops-json",
+    "type": "json",
+    "z": "netops-tab",
+    "name": "Parse JSON",
+    "property": "payload",
+    "action": "obj",
+    "pretty": false,
+    "x": 330,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "netops-event-function",
+    "type": "function",
+    "z": "netops-tab",
+    "name": "Validate event",
+    "func": "const body = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};\nconst event = String(body.event || '').trim().slice(0, 120);\nif (!event) { msg.statusCode = 400; msg.payload = { ok: false, error: 'event_required' }; return msg; }\nmsg.payload = { ok: true, accepted: true, event: event, received_at: new Date().toISOString(), mode: 'local-rules' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 200,
+    "wires": [["netops-event-out"]]
+  },
+  {
+    "id": "netops-event-out",
+    "type": "http response",
+    "z": "netops-tab",
+    "name": "Event response",
+    "statusCode": "",
+    "headers": {},
+    "x": 580,
+    "y": 200,
+    "wires": []
+  }
+]

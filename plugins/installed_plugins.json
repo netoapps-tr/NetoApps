@@ -1,0 +1,84 @@
+{
+  "plugins": {
+    "netoautomation": {
+      "name": "NetoAutomation",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netobackup": {
+      "name": "NetoBackup",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netobrowser": {
+      "name": "NetoBrowser",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoclipboard": {
+      "name": "NetoClipboard",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netodiagnostics": {
+      "name": "NetoDiagnostics",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netofocus": {
+      "name": "NetoFocus",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netonotes": {
+      "name": "NetoNotes",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netopilot": {
+      "name": "NetoPilot",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoplay": {
+      "name": "NetoPlay",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoreminders": {
+      "name": "NetoReminders",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoscenes": {
+      "name": "NetoScenes",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netosecurity": {
+      "name": "NetoSecurity",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netotimer": {
+      "name": "NetoTimer",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoupdater": {
+      "name": "NetoUpdater",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netoweather": {
+      "name": "NetoWeather",
+      "version": "1.0.0",
+      "installed": true
+    },
+    "netowindow": {
+      "name": "NetoWindow",
+      "version": "1.0.0",
+      "installed": true
+    }
+  }
+}

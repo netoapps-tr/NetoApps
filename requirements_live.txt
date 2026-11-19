@@ -18,11 +18,14 @@ yt-dlp==2026.7.4
 ytmusicapi==1.12.1
 pyautogui==0.9.54
 customtkinter==6.0.0
+reportlab==4.4.4
 lupa==2.8
 requests==2.34.2
 scrapling==0.4.15
 Flask==3.1.2
+PySide6==6.11.3
 PyQt6==6.11.0
+PyQt6-Qt6==6.11.0
 PyQt6-WebEngine==6.11.0
 pyinstaller==6.22.1
 # Android Device Doctor uses external adb/platform-tools (no cloud upload)

@@ -47,6 +47,7 @@ from neto_automation_guard import (
     health_check,
     history,
 )
+from neto_fluent_design import FLUENT_DARK, FLUENT_RADII
 
 try:
     from neto_branding import apply_window_icon as _neto_apply_window_icon, get_ctk_image as _neto_get_ctk_image
@@ -109,18 +110,20 @@ PERMISSION_LABELS = {
 class Palette:
     def __init__(self, getter: Optional[Callable[[], dict[str, str]]]):
         value = getter() if callable(getter) else {}
-        self.bg = value.get("bg", "#0B0B0F")
-        self.sidebar = value.get("sidebar", "#111116")
-        self.card = value.get("card", "#19191F")
-        self.card_2 = value.get("entry_bg", "#101015")
-        self.border = value.get("entry_border", "#35353F")
-        self.text = value.get("text_main", "#F4F4F5")
-        self.muted = value.get("text_dim", "#A1A1AA")
-        self.accent = value.get("neon", "#22C55E")
-        self.hover = value.get("button_hover", "#292932")
+        self.bg = value.get("bg", FLUENT_DARK["bg"])
+        self.sidebar = value.get("sidebar", FLUENT_DARK["sidebar"])
+        self.card = value.get("card", FLUENT_DARK["card"])
+        self.card_2 = value.get("entry_bg", FLUENT_DARK["entry_bg"])
+        self.border = value.get("entry_border", FLUENT_DARK["entry_border"])
+        self.text = value.get("text_main", FLUENT_DARK["text_main"])
+        self.muted = value.get("text_dim", FLUENT_DARK["text_dim"])
+        self.accent = value.get("accent", FLUENT_DARK["accent"])
+        self.accent_hover = value.get("accent_hover", FLUENT_DARK["accent_hover"])
+        self.accent_text = value.get("accent_text", FLUENT_DARK["accent_text"])
+        self.hover = value.get("button_hover", FLUENT_DARK["button_hover"])
         self.red = "#EF4444"
         self.yellow = "#F59E0B"
-        self.blue = "#3B82F6"
+        self.blue = FLUENT_DARK["accent"]
 
 
 def format_ts(value: Optional[float]) -> str:
@@ -246,19 +249,19 @@ class AutomationPanel:
         )
         style.map(
             "Automation.Treeview",
-            background=[("selected", "#24533A")],
+            background=[("selected", self.palette.accent)],
             foreground=[("selected", "#FFFFFF")],
         )
 
     def _button(self, parent, text, command, width=90, primary=False, danger=False):
         if danger:
             fg = self.palette.red
-            hover = "#DC2626"
+            hover = "#C43B4A"
             text_color = "#FFFFFF"
         elif primary:
             fg = self.palette.accent
-            hover = "#16A34A"
-            text_color = "#07110A"
+            hover = self.palette.accent_hover
+            text_color = self.palette.accent_text
         else:
             fg = self.palette.card_2
             hover = self.palette.hover
@@ -268,7 +271,7 @@ class AutomationPanel:
             text=text,
             width=width,
             height=34,
-            corner_radius=9,
+            corner_radius=FLUENT_RADII["control"],
             fg_color=fg,
             hover_color=hover,
             text_color=text_color,
@@ -285,7 +288,7 @@ class AutomationPanel:
             fg_color=self.palette.card,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=14,
+            corner_radius=FLUENT_RADII["card"],
         )
         header.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 6))
         header.grid_columnconfigure(1, weight=1)
@@ -337,14 +340,14 @@ class AutomationPanel:
             fg_color=self.palette.card,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=12,
+            corner_radius=FLUENT_RADII["card"],
         )
         right = ctk.CTkFrame(
             pane,
             fg_color=self.palette.card,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=12,
+            corner_radius=FLUENT_RADII["card"],
         )
         try:
             narrow = int(self.root.winfo_width()) < 900
@@ -381,7 +384,7 @@ class AutomationPanel:
         self.list_frame = ctk.CTkScrollableFrame(
             left,
             fg_color=self.palette.card_2,
-            corner_radius=10,
+            corner_radius=FLUENT_RADII["control"],
             border_width=0,
         )
         self.list_frame.pack(fill="both", expand=True, padx=9, pady=(0, 9))
@@ -419,7 +422,7 @@ class AutomationPanel:
             segmented_button_unselected_color=self.palette.card_2,
             segmented_button_unselected_hover_color=self.palette.hover,
             text_color=self.palette.text,
-            corner_radius=11,
+            corner_radius=FLUENT_RADII["control"],
         )
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=9, pady=(3, 9))
         for title in ("Genel", "Çalışmalar", "Log"):
@@ -436,7 +439,7 @@ class AutomationPanel:
             fg_color=self.palette.card_2,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=18,
+            corner_radius=FLUENT_RADII["card"],
             height=52,
         )
         action_bar.grid(row=2, column=0, sticky="ew", padx=13, pady=(0, 12))
@@ -555,7 +558,7 @@ class AutomationPanel:
                 fg_color="#1F3A2A" if selected else self.palette.card,
                 border_width=1,
                 border_color=self.palette.accent if selected else self.palette.border,
-                corner_radius=10,
+                corner_radius=FLUENT_RADII["control"],
                 cursor="hand2",
             )
             card.pack(fill="x", padx=3, pady=3)
@@ -1041,7 +1044,7 @@ class AutomationEditor:
             fg_color=self.palette.card,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=16,
+            corner_radius=FLUENT_RADII["card"],
         )
         self.shell.pack(fill="both", expand=True, padx=14, pady=14)
 
@@ -1090,7 +1093,7 @@ class AutomationEditor:
             fg_color=self.palette.card_2,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=12,
+            corner_radius=FLUENT_RADII["card"],
         )
         frame.pack(fill="x", padx=5, pady=6)
         ctk.CTkLabel(
@@ -1248,7 +1251,7 @@ class AutomationEditor:
                 fg_color=self.palette.card,
                 border_width=1,
                 border_color=self.palette.border,
-                corner_radius=9,
+                corner_radius=FLUENT_RADII["control"],
             )
             row.pack(fill="x", pady=3)
             row.grid_columnconfigure(0, weight=1)
@@ -1488,7 +1491,7 @@ class ActionEditor:
             fg_color=self.palette.card,
             border_width=1,
             border_color=self.palette.border,
-            corner_radius=15,
+            corner_radius=FLUENT_RADII["card"],
         )
         shell.pack(fill="both", expand=True, padx=13, pady=13)
         self.shell = shell

@@ -1,0 +1,48 @@
+{
+  "manifest_version": "1",
+  "version": "1.42.0",
+  "release_tag": "v1.42.0",
+  "notes": "NetOps system-file update; full program download is not required.",
+  "files": [
+    {
+      "path": "asistan beta.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/asistan%20beta.py",
+      "sha256": "00ebea4a77f093c2526e98c1b99f1364b835d1ef30725b2752f2522543d254e6"
+    },
+    {
+      "path": "neto_settings_page.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_settings_page.py",
+      "sha256": "159915627c83e1f81d9586b959594a55348dc3a56bc90821218332628081866d"
+    },
+    {
+      "path": "neto_updater.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_updater.py",
+      "sha256": "3439026f4bc5f7b8364d869893d3085c1ecdc0933581436157c89b8031ac1195"
+    },
+    {
+      "path": "neto_update_helper.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_update_helper.py",
+      "sha256": "f7f73d46d135abaa822af4415b620232e52b605671cb02ec4d5482015ef69615"
+    },
+    {
+      "path": "neto_system_updater.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_system_updater.py",
+      "sha256": "8f16f6130f089c4719f4460025b60c1b3d4e0e2765d769b839ea484a4fc8e181"
+    },
+    {
+      "path": "neto_motion_engine_v2.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_motion_engine_v2.py",
+      "sha256": "a208f164c53c1805c1b554005849876b004cda70f137bee39b4c01273ead2b96"
+    },
+    {
+      "path": "neto_runtime_core.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_runtime_core.py",
+      "sha256": "7cf69e276b4f3d6c9d1d55e30064923382fb4f9457e849577a8c855fa4723feb"
+    },
+    {
+      "path": "neto_version.py",
+      "url": "https://github.com/netoapps-tr/NetoApps/raw/v1.42.0/neto_version.py",
+      "sha256": "6f0572858682bfc60ac90a179135cbcfbf0d2f8f96865d915231951b523666d6"
+    }
+  ]
+}

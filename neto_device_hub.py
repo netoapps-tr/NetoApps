@@ -32,6 +32,7 @@ _AUDIO_STREAM_PATH: str | None = None
 _AUDIO_STREAM_LOCK = threading.Lock()
 _ASSISTANT_REQUEST_HANDLER: Callable[[str, str], Any] | None = None
 _MEDIA_REQUEST_HANDLER: Callable[[str, dict[str, Any], str], Any] | None = None
+_INPUT_REQUEST_HANDLER: Callable[[str, Any, str], Any] | None = None
 
 
 def _project_root() -> Path:
@@ -384,7 +385,9 @@ class NetOpsDeviceHub:
     # Runtime
     # ------------------------------------------------------------------
     def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive() and self._loop and self._server)
+        server = self._server
+        sockets = getattr(server, "sockets", None) if server is not None else None
+        return bool(self._thread and self._thread.is_alive() and self._loop and server and sockets)
 
     def local_endpoints(self) -> list[str]:
         ip = _local_ip_address()
@@ -407,28 +410,65 @@ class NetOpsDeviceHub:
             return {"ok": False, "error": "websockets paketi bulunamadi."}
 
         with self._state_lock:
-            if host:
-                self.host = str(host)
-            if port is not None:
-                self.port = int(port)
+            active_thread = self._thread
             if self.is_running():
                 return self.snapshot()
-            self._start_error = ""
-            self._ready.clear()
-            self._async_stop = None
+            if active_thread is not None and active_thread.is_alive():
+                # A Windows event-loop startup can occasionally stall before
+                # asyncio has a chance to report an exception. Do not create
+                # another orphan worker for every press of the UI button.
+                return {
+                    "ok": False,
+                    "error": self._start_error or "Cihazlar bağlantı servisi hazırlanamadı; önceki deneme halen yanıt vermiyor.",
+                }
 
-        self._thread = threading.Thread(target=self._thread_main, name="NetOpsDeviceHub", daemon=True)
-        self._thread.start()
-        if not self._ready.wait(timeout=6.0):
-            return {"ok": False, "error": self._start_error or "Device Hub baslatilamadi."}
-        if self._start_error:
-            return {"ok": False, "error": self._start_error}
-        self.ensure_pairing_code()
-        return self.snapshot()
+        requested_port = int(port if port is not None else self.port)
+        # Port 8765 is the documented default. A stale NetOps process or a
+        # different local tool can own it, so try a small neighbouring range
+        # instead of leaving the Device Hub button with no usable result.
+        candidate_ports = [requested_port]
+        if requested_port == 8765:
+            candidate_ports.extend(range(8766, 8776))
+
+        last_error = "Cihazlar başlatılamadı."
+        for candidate_port in candidate_ports:
+            with self._state_lock:
+                if host:
+                    self.host = str(host)
+                self.port = int(candidate_port)
+                if self.is_running():
+                    return self.snapshot()
+                self._start_error = ""
+                self._ready.clear()
+                self._async_stop = None
+
+            self._thread = threading.Thread(target=self._thread_main, name="NetOpsDeviceHub", daemon=True)
+            self._thread.start()
+            if not self._ready.wait(timeout=2.5):
+                # Keep the failure explicit: callers can render their UI and
+                # let users retry instead of freezing while a background
+                # asyncio setup is blocked by the host environment.
+                last_error = self._start_error or "Cihazlar bağlantı servisi zaman aşımına uğradı."
+            elif self._start_error:
+                last_error = self._start_error
+            elif self.is_running():
+                self.ensure_pairing_code()
+                return self.snapshot()
+            else:
+                last_error = "Cihazlar bağlantı servisi başlatılamadı."
+
+            # Retry only the common local port collision. Other failures such
+            # as a missing networking dependency remain visible to the caller.
+            error_text = str(last_error).casefold()
+            if "10048" not in error_text and "address already in use" not in error_text and "yalnızca bir kullanıma" not in error_text:
+                return {"ok": False, "error": last_error}
+
+        return {"ok": False, "error": last_error}
 
     def stop(self) -> dict[str, Any]:
         if not self._thread:
             return {"ok": True, "running": False}
+        _write_log("server stop requested")
         with self._state_lock:
             loop = self._loop
             stopper = self._async_stop
@@ -445,7 +485,9 @@ class NetOpsDeviceHub:
 
     def _thread_main(self) -> None:
         try:
+            _write_log(f"server thread start: {self.host}:{self.port}")
             asyncio.run(self._async_main())
+            _write_log("server thread exit: normal")
         except Exception as exc:
             self._start_error = str(exc)
             _write_log(f"server thread error: {exc}\n{traceback.format_exc()}")
@@ -455,6 +497,7 @@ class NetOpsDeviceHub:
         self._loop = asyncio.get_running_loop()
         self._async_stop = asyncio.Event()
         try:
+            _write_log(f"server bind begin: {self.host}:{self.port}")
             self._server = await websockets.serve(
                 self._handle_client,
                 self.host,
@@ -463,6 +506,7 @@ class NetOpsDeviceHub:
                 ping_timeout=20,
                 max_size=2**20,
             )
+            _write_log(f"server bind ready: {self.host}:{self.port}")
             self.ensure_pairing_code()
             self._ready.set()
             self._watchdog_task = asyncio.create_task(self._watchdog_loop())
@@ -482,6 +526,7 @@ class NetOpsDeviceHub:
                 self._server = None
                 self._async_stop = None
                 self._watchdog_task = None
+            _write_log("server socket closed")
             self._ready.set()
 
     async def _watchdog_loop(self) -> None:
@@ -636,6 +681,7 @@ class NetOpsDeviceHub:
             record["connected_at"] = now
         record["last_seen"] = now
         record["online"] = True
+        record["last_error"] = ""
         if "device_name" in payload:
             record["device_name"] = _safe_text(payload.get("device_name"))
         if "manufacturer" in payload:
@@ -794,9 +840,14 @@ class NetOpsDeviceHub:
             if action not in allowed_actions:
                 return {"type": "media_response", "id": request_id, "ok": False, "error": "MEDIA_ACTION_NOT_ALLOWED"}, current_device_id
             with self._state_lock:
-                known = self._devices.get(device_id) if device_id else None
+                record = self._devices.get(device_id) if device_id else None
                 handler = _MEDIA_REQUEST_HANDLER
-            if not known:
+                if record:
+                    record["last_seen"] = time.time()
+                    record["online"] = True
+                    record["last_error"] = ""
+                    self._save_state()
+            if not record:
                 return {"type": "media_response", "id": request_id, "ok": False, "error": "UNKNOWN_DEVICE"}, current_device_id
             if handler is None:
                 return {"type": "media_response", "id": request_id, "ok": False, "error": "MEDIA_UNAVAILABLE"}, device_id
@@ -811,6 +862,38 @@ class NetOpsDeviceHub:
             except Exception as exc:
                 _write_log(f"media request error: {exc}\n{traceback.format_exc()}")
                 return {"type": "media_response", "id": request_id, "ok": False, "error": "MEDIA_REQUEST_FAILED"}, device_id
+        if kind == "input_request":
+            device_id = _safe_text(message.get("device_id")) or current_device_id
+            request_id = _safe_text(message.get("id")) or f"input_{uuid.uuid4().hex}"
+            key = _safe_text(message.get("key")).casefold()
+            modifiers = message.get("modifiers")
+            if not device_id:
+                return {"type": "input_response", "id": request_id, "ok": False, "error": "MISSING_DEVICE_ID"}, current_device_id
+            if not key or len(key) > 32:
+                return {"type": "input_response", "id": request_id, "ok": False, "error": "INPUT_KEY_INVALID"}, current_device_id
+            with self._state_lock:
+                record = self._devices.get(device_id)
+                handler = _INPUT_REQUEST_HANDLER
+                if record:
+                    record["last_seen"] = time.time()
+                    record["online"] = True
+                    record["last_error"] = ""
+                    self._save_state()
+            if not record:
+                return {"type": "input_response", "id": request_id, "ok": False, "error": "UNKNOWN_DEVICE"}, current_device_id
+            if handler is None:
+                return {"type": "input_response", "id": request_id, "ok": False, "error": "INPUT_UNAVAILABLE"}, device_id
+            try:
+                result = await asyncio.to_thread(handler, key, modifiers, device_id)
+                if isinstance(result, dict):
+                    response = {"type": "input_response", "id": request_id, "ok": bool(result.get("ok", True))}
+                    response.update({str(key_name): value for key_name, value in result.items() if key_name not in {"type", "id"}})
+                else:
+                    response = {"type": "input_response", "id": request_id, "ok": True, "display_text": _safe_text(result)}
+                return response, device_id
+            except Exception as exc:
+                _write_log(f"input request error: {exc}\n{traceback.format_exc()}")
+                return {"type": "input_response", "id": request_id, "ok": False, "error": "INPUT_REQUEST_FAILED"}, device_id
         if kind == "capabilities":
             device_id = _safe_text(message.get("device_id")) or current_device_id
             if not device_id:
@@ -1095,6 +1178,12 @@ def device_hub_set_media_handler(handler: Callable[[str, dict[str, Any], str], A
     _MEDIA_REQUEST_HANDLER = handler
 
 
+def device_hub_set_input_handler(handler: Callable[[str, Any, str], Any] | None) -> None:
+    """Register the allowlisted phone keyboard/navigation handler."""
+    global _INPUT_REQUEST_HANDLER
+    _INPUT_REQUEST_HANDLER = handler
+
+
 def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None):
     """Open a compact device management window."""
     global _DEVICE_HUB_WINDOW
@@ -1109,16 +1198,6 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
         return None
 
     hub = get_device_hub()
-    # The hub may already be running from app startup; when it is not, bind
-    # to the same LAN address shown in the QR payload instead of loopback.
-    result = hub.start(host=_local_ip_address(), port=hub.port)
-    if not result.get("ok") and "running" not in result:
-        try:
-            messagebox.showerror("NETOPS Device Hub", _safe_text(result.get("error"), "Hub baslatilamadi."))
-        except Exception:
-            pass
-        return None
-
     hub.ensure_pairing_code()
 
     root = parent or getattr(tk, "_default_root", None)
@@ -1144,7 +1223,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
 
     window = ctk.CTkToplevel(root)
     _DEVICE_HUB_WINDOW = window
-    window.title("NETOPS Device Hub")
+    window.title("NetOps Cihazlar")
     window.geometry("900x720")
     window.minsize(820, 620)
     window.configure(fg_color=_pal("bg", "#0B1020"))
@@ -1156,17 +1235,18 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     except Exception:
         pass
 
-    status_var = tk.StringVar(value="")
+    status_var = tk.StringVar(value="Cihaz baglanti servisi hazirlaniyor...")
     endpoint_var = tk.StringVar(value="")
     pairing_var = tk.StringVar(value="")
     count_var = tk.StringVar(value="")
     selection_var = tk.StringVar(value="Secili cihaz yok.")
     auto_pair_attempted = False
+    hub_status_override = "Cihaz baglanti servisi hazirlaniyor..."
 
     shell = ctk.CTkFrame(
         window,
         fg_color=_pal("card", "#121A2D"),
-        corner_radius=20,
+        corner_radius=8,
         border_width=1,
         border_color=_pal("entry_border", "#2B3550"),
     )
@@ -1180,7 +1260,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
 
     title = ctk.CTkLabel(
         header,
-        text="NETOPS Device Hub",
+        text="Cihazlar",
         text_color=_pal("text_main", "#F5F7FF"),
         font=("Segoe UI Semibold", 24),
         anchor="w",
@@ -1189,7 +1269,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
 
     subtitle = ctk.CTkLabel(
         header,
-        text="PC adresi + pairing kodu veya QR ile Android cihaz bagla; baglantiyi ve medya komutlarini yonet.",
+        text="Tanidigin USB cihazlarini + ile ekle; NetOps komutlari ve medya baglantisini yonet.",
         text_color=_pal("text_dim", "#9FA9C1"),
         font=("Segoe UI", 11),
         anchor="w",
@@ -1203,7 +1283,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     server_card = ctk.CTkFrame(
         controls,
         fg_color=_pal("sidebar", "#0F1830"),
-        corner_radius=16,
+        corner_radius=6,
     )
     server_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
     server_card.grid_columnconfigure(0, weight=1)
@@ -1211,7 +1291,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     pairing_card = ctk.CTkFrame(
         controls,
         fg_color=_pal("sidebar", "#0F1830"),
-        corner_radius=16,
+        corner_radius=6,
     )
     pairing_card.grid(row=0, column=1, sticky="nsew", padx=8)
     pairing_card.grid_columnconfigure(0, weight=1)
@@ -1219,7 +1299,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     action_card = ctk.CTkFrame(
         controls,
         fg_color=_pal("sidebar", "#0F1830"),
-        corner_radius=16,
+        corner_radius=6,
     )
     action_card.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
     action_card.grid_columnconfigure((0, 1), weight=1)
@@ -1389,14 +1469,10 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     def _toggle_server() -> None:
         if hub.is_running():
             hub.stop()
-            status_var.set("Device Hub durduruldu.")
+            _set_hub_status("Cihazlar durduruldu.")
+            _refresh_ui(schedule_next=False)
         else:
-            started = hub.start()
-            if started.get("ok"):
-                status_var.set("Device Hub baslatildi.")
-            else:
-                status_var.set(f"Baslatma hatasi: {started.get('error', 'bilinmiyor')}")
-        _refresh_ui(schedule_next=False)
+            _start_hub_async(manual=True)
 
     start_stop_button = ctk.CTkButton(action_card, text="Baslat / Durdur", height=30, command=_toggle_server)
     start_stop_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(6, 6))
@@ -1431,6 +1507,78 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     )
     send_button.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
 
+    def _add_usb_device() -> None:
+        """Explicitly approve one authorized USB device for Termux auto-connect."""
+        try:
+            import neto_android_device
+        except Exception as exc:
+            _set_hub_status(f"Android USB modulu acilamadi: {exc}")
+            return
+        listed = neto_android_device.list_usb_devices()
+        usb_devices = listed.get("usb_devices") or []
+        registry = neto_android_device.load_usb_registry()
+        candidates = neto_android_device.unregistered_authorized_usb_devices(usb_devices, registry)
+        if not candidates:
+            unauthorized = [item for item in usb_devices if item.get("state") != "device"]
+            if unauthorized:
+                _set_hub_status("USB cihaz bulundu ancak USB hata ayiklama izni onaylanmamis.")
+            else:
+                _set_hub_status("Taninmayan yetkili USB cihaz yok. Telefonu bagla ve + ile tekrar dene.")
+            return
+        serial = str(candidates[0].get("serial") or "")
+        if len(candidates) > 1:
+            choices = ", ".join(str(item.get("serial") or "") for item in candidates)
+            selected = simpledialog.askstring(
+                "USB cihaz sec",
+                f"Taninmayan cihaz seri numaralari:\n{choices}\n\nSeri numarasini yaz:",
+                initialvalue=serial,
+                parent=window,
+            )
+            if selected is None:
+                return
+            serial = selected.strip()
+        if not any(str(item.get("serial") or "") == serial for item in candidates):
+            _set_hub_status("Bu cihaz taninmadi; yalnizca yetkili USB listesinden secim yapilabilir.")
+            return
+        name = simpledialog.askstring(
+            "Cihaz adi",
+            "NetOps'ta gorunecek cihaz adini gir:",
+            initialvalue="Telefonum",
+            parent=window,
+        )
+        if name is None or not name.strip():
+            return
+        _set_hub_status("Termux'a netops komutu kuruluyor ve cihaz eslestiriliyor...")
+
+        def worker() -> None:
+            result = neto_android_device.register_termux_device(
+                serial,
+                f"ws://127.0.0.1:{hub.port}",
+                hub.ensure_pairing_code(),
+                name.strip(),
+            )
+
+            def apply_result() -> None:
+                message = str(result.get("message") or result.get("error") or "USB cihaz eklenemedi.")
+                _set_hub_status(message)
+                selection_var.set(f"USB hedefi: {serial}")
+                _refresh_ui(schedule_next=False)
+
+            try:
+                window.after(0, apply_result)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="NetOpsUsbDeviceRegistrar", daemon=True).start()
+
+    add_device_button = ctk.CTkButton(
+        action_card,
+        text="+ Cihaz Ekle",
+        height=30,
+        command=_add_usb_device,
+    )
+    add_device_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
+
     content = ctk.CTkFrame(shell, fg_color="transparent")
     content.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 8))
     content.grid_columnconfigure(0, weight=1)
@@ -1439,7 +1587,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
     scroll = ctk.CTkScrollableFrame(
         content,
         fg_color=_pal("bg", "#0B1020"),
-        corner_radius=18,
+        corner_radius=8,
         border_width=1,
         border_color=_pal("entry_border", "#2B3550"),
     )
@@ -1515,7 +1663,7 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
         card = ctk.CTkFrame(
             parent,
             fg_color=_pal("sidebar", "#10182A"),
-            corner_radius=16,
+            corner_radius=6,
             border_width=1,
             border_color=accent if online else _pal("entry_border", "#2B3550"),
         )
@@ -1623,18 +1771,18 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
         pairing = snap.get("pairing_code", "")
         pairing_var.set(pairing)
         count_var.set(f"{snap.get('online_count', 0)}/{snap.get('device_count', 0)} cihaz online")
-        status_var.set(f"Server {'calisiyor' if snap.get('running') else 'durdu'} | PC: {snap.get('pc_name', '')}")
+        if hub_status_override:
+            status_var.set(hub_status_override)
+        else:
+            status_var.set(f"Server {'calisiyor' if snap.get('running') else 'durdu'} | PC: {snap.get('pc_name', '')}")
         selection_var.set(f"{snap.get('device_count', 0)} cihaz listelendi.")
-        if pairing and not auto_pair_attempted and not snap.get("online_count", 0) and not snap.get("device_count", 0):
-            auto_pair_attempted = True
-            window.after(1200, _send_pairing_to_tablet)
         for child in scroll.winfo_children():
             child.destroy()
         devices = snap.get("devices") or []
         if not devices:
             empty = ctk.CTkLabel(
                 scroll,
-                text="Henüz bagli cihaz yok. Android Agent'ta pairing kodunu gir.",
+                text="Henüz taninan cihaz yok. USB hata ayiklamayi ac, telefonu bagla ve + Cihaz Ekle'ye bas.",
                 text_color=_pal("text_dim", "#9FA9C1"),
                 font=("Segoe UI", 12),
                 anchor="center",
@@ -1646,6 +1794,45 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
         if schedule_next:
             window.after(1000, _refresh_ui)
 
+    def _set_hub_status(message: str) -> None:
+        nonlocal hub_status_override
+        hub_status_override = message
+        status_var.set(message)
+
+    def _start_hub_async(manual: bool = False) -> None:
+        """Start the LAN service without ever blocking the Tk event loop."""
+        if hub.is_running():
+            _set_hub_status("Cihazlar çalışıyor.")
+            _refresh_ui(schedule_next=False)
+            return
+
+        _set_hub_status("Cihazlar bağlantı servisi başlatılıyor...")
+
+        def worker() -> None:
+            # USB reverse reaches the PC through loopback; the firewall still
+            # limits unsolicited LAN access to the configured local subnet.
+            result = hub.start(host="0.0.0.0", port=hub.port)
+
+            def apply_result() -> None:
+                try:
+                    if not window.winfo_exists():
+                        return
+                except Exception:
+                    return
+                if result.get("ok") or result.get("running"):
+                    _set_hub_status("Cihazlar çalışıyor. Telefonu QR veya eşleştirme kodu ile bağlayabilirsin.")
+                else:
+                    error = _safe_text(result.get("error"), "bilinmeyen hata")
+                    _set_hub_status(f"Cihaz penceresi hazir, ag servisi acilamadi: {error}")
+                _refresh_ui(schedule_next=False)
+
+            try:
+                window.after(0, apply_result)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="NetOpsDeviceHubStarter", daemon=True).start()
+
     def _on_close() -> None:
         global _DEVICE_HUB_WINDOW
         try:
@@ -1655,7 +1842,18 @@ def open_device_hub_window(parent=None, T=None, palette=None, say_callback=None)
             pass
 
     window.protocol("WM_DELETE_WINDOW", _on_close)
+    def _apply_fluent_theme() -> None:
+        try:
+            from temalar import _tum_widgetlari_guncelle
+            _tum_widgetlari_guncelle(window, "dark")
+        except Exception:
+            # The device window remains usable even if the optional theme
+            # refresh is unavailable during a lazy import.
+            pass
+
+    window.after_idle(_apply_fluent_theme)
     _refresh_ui()
+    _start_hub_async()
     return window
 
 

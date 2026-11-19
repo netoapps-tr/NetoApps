@@ -13,6 +13,8 @@ import difflib
 import time
 import queue
 import math
+import subprocess
+from pathlib import Path
 from typing import Any, cast
 
 
@@ -94,6 +96,70 @@ try:
 except Exception:
     def _neto_now_playing_interval(_name, default):
         return default
+
+try:
+    from neto_now_playing_atmosphere import atmosphere_for as _neto_atmosphere_for
+except Exception:
+    def _neto_atmosphere_for(_info, _frame=0):
+        return {"primary": "#2D7FF9", "secondary": "#7C3AED", "pulse": 0.2, "active": False}
+
+# Extensions are intentionally dormant until their host contract is finalized.
+# This keeps startup fast and prevents a third-party package from breaking the
+# built-in UI. Set NETOPS_ENABLE_PLUGINS=1 only while developing that system.
+_NETOPS_PLUGIN_SYSTEM_ENABLED = os.environ.get("NETOPS_ENABLE_PLUGINS", "0") == "1"
+# Keep startup focused on the interface and chat. Optional watchers, warmups,
+# device services and scheduled maintenance can be enabled for development with
+# NETOPS_ENABLE_BACKGROUND_SERVICES=1, but they must never surprise a normal run.
+_NETOPS_BACKGROUND_SERVICES_ENABLED = (
+    os.environ.get("NETOPS_ENABLE_BACKGROUND_SERVICES", "0").strip() == "1"
+)
+# Update checks are lightweight and run in a worker after the legacy UI is
+# ready. They can be disabled explicitly with NETO_ENABLE_STARTUP_UPDATE_CHECK=0.
+_NETOPS_STARTUP_UPDATE_CHECK_ENABLED = (
+    os.environ.get("NETO_ENABLE_STARTUP_UPDATE_CHECK", "1").strip() != "0"
+)
+_NETO_RECOVERY_MODE = False
+_NETO_RECOVERY_LAUNCH_PENDING = False
+_NETO_RECOVERY_CONFIRMATION_PENDING = False
+    # v1.53 opens the already-built interface directly. Set this to 0 only for
+# launch-gate troubleshooting; the old gate remains available as a fallback.
+NETOPS_DIRECT_START = os.environ.get("NETOPS_DIRECT_START", "1").strip() != "0"
+# Legacy control paths are kept on disk for rollback, but are not part of the
+# product runtime. They created hidden side effects unrelated to the assistant.
+_NETOPS_LEGACY_FEATURES = {
+    "hidden_axvord_mode": False,
+    "windows_session_bridge": False,
+    "qemu_os_controls": False,
+}
+_netops_plugin_manager = None
+_netops_plugin_records = []
+_netoplay_plugin_installed = False
+_netops_plugin_api = None
+if _NETOPS_PLUGIN_SYSTEM_ENABLED:
+    try:
+        from neto_plugin_manager import NetOpsPluginManager as _NetOpsPluginManager
+        from neto_plugin_api import NetOpsPluginAPI as _NetOpsPluginAPI
+        from neto_pilot_host import build_handlers as _neto_pilot_build_handlers
+        from neto_runtime_core import get_runtime as _neto_get_runtime
+
+        _netops_plugin_manager = _NetOpsPluginManager()
+        _netops_plugin_records = _netops_plugin_manager.discover()
+        _netops_plugin_api = _NetOpsPluginAPI(
+            handlers=_neto_pilot_build_handlers(globals()),
+            permission_manager=_neto_get_runtime().permissions,
+        )
+    except Exception as _netops_plugin_boot_error:
+        _netops_plugin_manager = None
+        _netops_plugin_records = []
+        _netops_plugin_api = None
+        print(f"[PLUGIN_BOOT] {_netops_plugin_boot_error}", flush=True)
+
+
+def netops_plugin_invoke(action: str, *args, **kwargs):
+    """Invoke a registered plugin action through NetOps permissions."""
+    if not _NETOPS_PLUGIN_SYSTEM_ENABLED or _netops_plugin_api is None:
+        return {"ok": False, "error": "Eklenti API hazır değil."}
+    return _netops_plugin_api.invoke(action, *args, **kwargs)
 
 try:
     from neto_tray import (
@@ -336,6 +402,7 @@ from config import *                           # Tüm yollar, sabitler, paletler
 from temalar import tema_uygula as _temalar_tema_uygula, aktif_palet
 import temalar as _temalar_modulu
 from neto_modern_ui import input_icon as _neto_input_icon
+from neto_fluent_design import FLUENT_CONTROL_HEIGHT, FLUENT_DARK, FLUENT_NAV_WIDTH, FLUENT_RADII
 
 # ------------------------------------------------------------
 # NETO TEMA + VURGU MOTORU
@@ -418,31 +485,39 @@ def _neto_tema_adi(secim=None):
 
 
 def _neto_arayuz_stili(secim=None):
-    deger = str(secim or "classic").strip().lower()
+    deger = str(secim or "fluent").strip().lower()
     aliases = {
-        "glass": "liquid-glass",
-        "liquid glass": "liquid-glass",
-        "liquid_glass": "liquid-glass",
-        "sıvı cam": "liquid-glass",
-        "sivi cam": "liquid-glass",
-        "cam": "liquid-glass",
-        "experians 2.5": "experians",
-        "neto experians": "experians",
-        "experians": "experians",
-        "klasik": "classic",
+        "glass": "fluent",
+        "liquid glass": "fluent",
+        "liquid_glass": "fluent",
+        "liquid-glass": "fluent",
+        "sıvı cam": "fluent",
+        "sivi cam": "fluent",
+        "cam": "fluent",
+        "fluent design": "fluent",
+        "microsoft fluent": "fluent",
+        "fluent": "fluent",
+        "experians 2.5": "fluent",
+        "neto experians": "fluent",
+        "experians": "fluent",
+        "zenka": "fluent",
+        "zenkamind ai": "fluent",
+        "zenkamind": "fluent",
+        "klasik": "fluent",
+        "classic": "fluent",
     }
     deger = aliases.get(deger, deger)
     try:
         valid = {str(x).strip().lower() for x in VALID_SURFACE_STYLES}
     except Exception:
-        valid = {"classic", "liquid-glass", "experians"}
+        valid = {"fluent", "classic", "liquid-glass", "experians", "experians3", "zenkamind"}
     if deger in valid:
         return deger
-    return "classic"
+    return "fluent"
 
 
 def _neto_hafizadan_tema_oku():
-    data = {"tema": "light", "renk_temasi": "blue", "arayuz_stili": "experians"}
+    data = {"tema": "dark", "renk_temasi": "blue", "arayuz_stili": "fluent"}
     try:
         if os.path.exists(FILE_PATH):
             with open(FILE_PATH, "r", encoding="utf-8") as f:
@@ -494,12 +569,14 @@ def _neto_kontrast_metin(hex_renk):
         return "#FFFFFF"
 
 
-def _neto_palet_uret(mod, vurgu_adi, arayuz_stili="classic"):
+def _neto_palet_uret(mod, vurgu_adi, arayuz_stili="fluent"):
     stil = _neto_arayuz_stili(arayuz_stili)
     taban_haritasi = {
+        "fluent": SURFACE_PALETS.get("fluent", NETO_TEMA_TABAN_PALETLERI),
         "classic": NETO_TEMA_TABAN_PALETLERI,
         "liquid-glass": NETO_LIQUID_GLASS_TABAN_PALETLERI,
         "experians": SURFACE_PALETS.get("experians", NETO_LIQUID_GLASS_TABAN_PALETLERI),
+        "zenkamind": SURFACE_PALETS.get("zenkamind", NETO_TEMA_TABAN_PALETLERI),
     }
     tabanlar = taban_haritasi.get(stil, NETO_TEMA_TABAN_PALETLERI)
     palet = dict(tabanlar.get(mod, NETO_TEMA_TABAN_PALETLERI[mod]))
@@ -623,7 +700,7 @@ def _neto_tema_kaydet(mod, vurgu_adi, arayuz_stili=None):
     """Tema dosyasını yalnızca gerçek değer değiştiğinde yazar."""
     try:
         data = _neto_hafizadan_tema_oku()
-        stil_adi = _neto_arayuz_stili(arayuz_stili if arayuz_stili is not None else data.get("arayuz_stili", "experians"))
+        stil_adi = _neto_arayuz_stili(arayuz_stili if arayuz_stili is not None else data.get("arayuz_stili", "fluent"))
         if (
             data.get("tema") == mod
             and data.get("renk_temasi") == vurgu_adi
@@ -749,7 +826,7 @@ def tema_uygula(secim=None, renk_temasi=None, arayuz_stili=None):
     ayar = _neto_hafizadan_tema_oku()
     raw = str(secim).strip().lower() if secim is not None else ""
     tema_degerleri = {"dark", "light", "koyu", "açık", "acik", "white", "beyaz"}
-    stil_degerleri = {"classic", "liquid-glass", "glass", "liquid glass", "sıvı cam", "sivi cam", "cam", "klasik"}
+    stil_degerleri = {"fluent", "fluent design", "microsoft fluent", "classic", "liquid-glass", "glass", "liquid glass", "sıvı cam", "sivi cam", "cam", "klasik", "zenka", "zenkamind", "zenkamind ai"}
     stil_degerleri.update({"experians", "experians 2.5", "neto experians"})
     if raw and raw in stil_degerleri and arayuz_stili is None and renk_temasi is None:
         arayuz_stili = raw
@@ -763,7 +840,7 @@ def tema_uygula(secim=None, renk_temasi=None, arayuz_stili=None):
         renk_temasi if renk_temasi is not None else ayar.get("renk_temasi", "green")
     )
     stil_adi = _neto_arayuz_stili(
-        arayuz_stili if arayuz_stili is not None else ayar.get("arayuz_stili", "experians")
+        arayuz_stili if arayuz_stili is not None else ayar.get("arayuz_stili", "fluent")
     )
 
     onceki_mod = _NETO_TEMA_DURUM.get("mod")
@@ -1910,12 +1987,20 @@ def ses_oynat(durum):
                 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
 
             yol = None
+            try:
+                from neto_sound_manager import resolve_override
+                override_role = "startup" if durum == "start" else "update" if durum == "update" else ""
+                override = resolve_override(override_role) if override_role else None
+            except Exception:
+                override = None
             if durum == "start":
                 h_ayar = veri_yukle()
                 ozel_ses_adi = str(h_ayar.get("secilen_ses", "varsayilan") or "varsayilan")
 
                 # Eski paket adı varsayılan olarak kaydedilmişse yeni birinci sese geçir.
-                if ozel_ses_adi in ("varsayilan", "Neto Asistan giriş.mp3", NETO_STARTUP_SOUND_ASSET):
+                if override is not None:
+                    yol = override
+                elif ozel_ses_adi in ("varsayilan", "Neto Asistan giriş.mp3", NETO_STARTUP_SOUND_ASSET):
                     bundled = get_asset_path(NETO_STARTUP_SOUND_ASSET)
                     yol = bundled if bundled and os.path.exists(bundled) else START_SOUND_DEFAULT
                 else:
@@ -1924,8 +2009,11 @@ def ses_oynat(durum):
                         yol = get_asset_path(ozel_ses_adi)
 
             elif durum == "update":
-                bundled = get_asset_path(NETO_UPDATE_SOUND_ASSET)
-                yol = bundled if bundled and os.path.exists(bundled) else DONE_SOUND
+                if override is not None:
+                    yol = override
+                else:
+                    bundled = get_asset_path(NETO_UPDATE_SOUND_ASSET)
+                    yol = bundled if bundled and os.path.exists(bundled) else DONE_SOUND
 
             else:
                 ses_map = {"tamam": DONE_SOUND, "hata": ERROR_SOUND}
@@ -2037,7 +2125,8 @@ def veri_yukle():
         "kufur_filtresi": True,
         "tema": "light",
         "renk_temasi": "blue",
-        "arayuz_stili": "experians",
+        "arayuz_stili": "fluent",
+        "netops_agent_mode": False,
         "dil": "en"
     }
     if os.path.exists(FILE_PATH):
@@ -2046,14 +2135,14 @@ def veri_yukle():
                 varsayilan.update(json.load(f))
         except Exception: pass
     varsayilan["renk_temasi"] = _neto_vurgu_adi(varsayilan.get("renk_temasi", "green"))
-    varsayilan["arayuz_stili"] = _neto_arayuz_stili(varsayilan.get("arayuz_stili", "experians"))
+    varsayilan["arayuz_stili"] = _neto_arayuz_stili(varsayilan.get("arayuz_stili", "fluent"))
     return varsayilan
 
 def veri_kaydet(hafiza):
     try:
         hafiza = dict(hafiza or {})
         hafiza["renk_temasi"] = _neto_vurgu_adi(hafiza.get("renk_temasi", "green"))
-        hafiza["arayuz_stili"] = _neto_arayuz_stili(hafiza.get("arayuz_stili", "experians"))
+        hafiza["arayuz_stili"] = _neto_arayuz_stili(hafiza.get("arayuz_stili", "fluent"))
         with open(FILE_PATH, "w", encoding="utf-8") as f:
             json.dump(hafiza, f, ensure_ascii=False, indent=4)
         return True
@@ -2535,6 +2624,19 @@ def neto_v10_pulse_ac():
         return None
 
 
+def neto_command_arena_ac_safe():
+    """Open the live, read-only command activity board."""
+    root_obj = _neto_app_root()
+    if root_obj is None:
+        return None
+    try:
+        mod = _neto_lazy_import("neto_command_arena")
+        return mod.open_command_arena(root_obj, aktif_palet)
+    except Exception as exc:
+        neto_toast_goster("NetOps Komut Arenası", f"Panel açılamadı: {exc}", "error")
+        return None
+
+
 def neto_quick_actions_penceresi_ac():
     global _NETO_QUICK_ACTIONS_WINDOW
     root_obj = _neto_app_root()
@@ -2665,15 +2767,21 @@ def neto_quick_actions_penceresi_ac():
             False,
         ),
         (
+            "Komut Arenası" if tr else "Command Arena",
+            "Telefon ve NetOps komutlarını canlı akışta izle." if tr else "Watch phone and NetOps commands live.",
+            lambda: neto_command_arena_ac_safe(),
+            True,
+        ),
+        (
             "Log Klasörü" if tr else "Log Folder",
             "Log klasörünü doğrudan aç." if tr else "Open the log folder directly.",
             lambda: neto_logs_klasorunu_ac(),
             False,
         ),
         (
-            "Device Hub" if tr else "Device Hub",
-            "Pairing, heartbeat ve medya komutları için cihaz merkezini aç." if tr else "Open the device center for pairing, heartbeat and media commands.",
-            lambda: neto_device_hub_ac_safe(),
+            "Remote",
+            "Termux cihazlarını, bağlantıyı ve izinli komutları yönet.",
+            lambda: neto_remote_surface_launch_safe(),
             True,
         ),
     ]
@@ -2882,6 +2990,7 @@ secili_resim_yolu = None
 secili_resim_preview_ref = None
 live_mode_controller = None
 live_panel_acik = False
+_NETO_PENDING_FILE_COMMAND = None
 now_playing_overlay: Any = None
 now_playing_island: Any = None
 now_playing_island_frame: Any = None
@@ -2910,6 +3019,7 @@ now_playing_idle_refreshing = False
 now_playing_idle_bg_label: Any = None
 now_playing_idle_bg_canvas: Any = None
 now_playing_idle_bg_image_item: Any = None
+now_playing_idle_atmosphere_item: Any = None
 now_playing_idle_canvas_items: dict[str, Any] = {}
 now_playing_idle_bg_job = None
 now_playing_idle_bg_frames: list[Any] = []
@@ -2918,7 +3028,51 @@ now_playing_idle_bg_size = (0, 0)
 now_playing_end_time = 0
 now_playing_last_key = None
 now_playing_paused = False
+# Now Playing is a built-in NetOps feature, not a plugin dependency. The
+# extension switch remains reserved for the future plugin host and no longer
+# hides the media controls or the Now Playing screen.
 eklenti_aktif_mi = False
+_netoplay_ui_items = {}
+
+
+def _netoplay_ui_enabled() -> bool:
+    """Keep the built-in Now Playing surface available without plugin boot."""
+    if not _NETOPS_PLUGIN_SYSTEM_ENABLED:
+        return True
+    return bool(_netoplay_plugin_installed and eklenti_aktif_mi)
+
+
+def _netoplay_register_ui_item(name, widget, **pack_options):
+    """Remember a widget's original geometry so enabling the plugin restores it."""
+    _netoplay_ui_items[str(name)] = (widget, dict(pack_options))
+    if _netoplay_ui_enabled():
+        try:
+            if not widget.winfo_manager():
+                widget.pack(**pack_options)
+        except Exception:
+            pass
+    else:
+        try:
+            widget.pack_forget()
+        except Exception:
+            pass
+    return widget
+
+
+def _netoplay_sync_ui():
+    """Show/hide every legacy Now Playing control without rebuilding the sidebar."""
+    enabled = _netoplay_ui_enabled()
+    for widget, pack_options in list(_netoplay_ui_items.values()):
+        try:
+            if enabled:
+                if not widget.winfo_manager():
+                    widget.pack(**pack_options)
+            else:
+                widget.pack_forget()
+        except Exception:
+            pass
+
+
 volume_label = None
 volume_slider = None
 volume_slider_dragging = False
@@ -2929,6 +3083,9 @@ now_playing_artist_label: Any = None
 now_playing_source_label: Any = None
 now_playing_status_label: Any = None
 now_playing_visual_frame: Any = None
+now_playing_youtube_host_frame: Any = None
+now_playing_youtube_panel: Any = None
+now_playing_youtube_live_button: Any = None
 now_playing_visual_canvas: Any = None
 now_playing_visual_logo_label: Any = None
 now_playing_visual_mode_button: Any = None
@@ -2959,6 +3116,9 @@ now_playing_monitor_stop = threading.Event()
 now_playing_monitor_last_info = None
 now_playing_monitor_last_seen = 0.0
 now_playing_ui_pump_job = None
+now_playing_sidebar_probe_job = None
+now_playing_sidebar_probe_busy = False
+now_playing_sidebar_probe_misses = 0
 
 # VPN / tünel uyarı sistemi
 _NETO_VPN_UYARI_PENCERESI = None
@@ -3015,17 +3175,39 @@ def komut_token_temizle(metin):
 
 
 def _neto_sohbet_ekrani_ac():
-    """Karşılama ekranından ChatGPT benzeri sohbet geçmişine geçer."""
+    """Utility home surface'ten mevcut sohbet geçmişine geçer."""
     try:
         shell = globals().get("chat_bubble_shell")
         if shell is None or not shell.winfo_exists():
             return False
         from neto_motion_engine_v2 import get_motion_engine
         get_motion_engine(root).cancel("hero-intro")
+
+        # Embedded tools and settings temporarily hide the normal chat/input
+        # surfaces. Returning to chat must restore both surfaces; otherwise
+        # the right side stays blank and the message bar appears to vanish.
+        chat = globals().get("chat_container")
+        if chat is not None and chat.winfo_exists() and chat.winfo_manager() != "pack":
+            chat.pack(side="top", expand=True, fill="both", padx=24, pady=(12, 6))
+        restore_input = globals().get("_neto_input_bar_konumla")
+        if callable(restore_input):
+            restore_input()
+        else:
+            input_bar = globals().get("input_container")
+            if input_bar is not None and input_bar.winfo_exists() and input_bar.winfo_manager() != "pack":
+                input_bar.pack(side="bottom", fill="x", expand=False,
+                               padx=24, pady=(0, 10), anchor="s", before=chat)
+
         for widget_name in ("gif_ana_label", "lbl_welcome"):
             widget = globals().get(widget_name)
             if widget is not None and widget.winfo_exists():
                 widget.pack_forget()
+        dashboard = globals().get("home_dashboard_surface")
+        if dashboard is not None and dashboard.winfo_exists():
+            dashboard.pack_forget()
+        hero = globals().get("hero_content")
+        if hero is not None and hero.winfo_exists() and hero.winfo_manager() != "pack":
+            hero.pack(expand=True, fill="both")
         status = globals().get("hero_status_frame")
         if status is not None and status.winfo_exists():
             status.pack_forget()
@@ -3058,6 +3240,47 @@ def _neto_sohbet_mesaj_sil(widget):
     except Exception:
         pass
     return False
+
+
+def _neto_sohbet_dusunme_metni_guncelle(widget, metin):
+    """Geciken yerel/model islemlerinde dusunme kartini canli tutar."""
+    try:
+        if widget is None or not widget.winfo_exists():
+            return False
+        pending = list(widget.winfo_children())
+        while pending:
+            child = pending.pop()
+            pending.extend(child.winfo_children())
+            if getattr(child, "_neto_thinking_label", False):
+                child.configure(text=str(metin))
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _neto_sohbet_sarma_guncelle():
+    """Keep chat cards readable when the main window becomes narrow."""
+    try:
+        area = globals().get("chat_bubble_area")
+        if area is None or not area.winfo_exists():
+            return
+        available = int(area.winfo_width() or 0)
+        if available < 120:
+            return
+        assistant_wrap = max(180, min(650, available - 126))
+        user_wrap = max(160, min(390, available - 42))
+        pending = [*area.winfo_children()]
+        while pending:
+            widget = pending.pop()
+            pending.extend(widget.winfo_children())
+            kind = getattr(widget, "_neto_chat_wrap_kind", "")
+            if kind == "assistant":
+                widget.configure(wraplength=assistant_wrap)
+            elif kind == "user":
+                widget.configure(wraplength=user_wrap)
+    except Exception:
+        pass
 
 
 def _neto_sohbet_balonu_ekle(metin, rol="assistant"):
@@ -3112,6 +3335,7 @@ def _neto_sohbet_balonu_ekle(metin, rol="assistant"):
                 justify="left",
                 wraplength=390,
             )
+            label._neto_chat_wrap_kind = "user"
             label.pack(padx=16, pady=11)
         else:
             left = ctk.CTkFrame(row, fg_color="transparent")
@@ -3181,7 +3405,14 @@ def _neto_sohbet_balonu_ekle(metin, rol="assistant"):
                 anchor="w",
                 wraplength=650,
             )
+            label._neto_chat_wrap_kind = "assistant"
+            label._neto_thinking_label = is_thinking
             label.pack(fill="x", padx=15, pady=(0, 14))
+
+        try:
+            area.after_idle(_neto_sohbet_sarma_guncelle)
+        except Exception:
+            _neto_sohbet_sarma_guncelle()
 
         children = list(alan.winfo_children())
         if len(children) > 40:
@@ -3422,14 +3653,15 @@ def _neto_kendini_onar(kaynak: str = "", hata: Exception | str | None = None) ->
     except Exception:
         pass
 
-    try:
-        root_obj = globals().get("root")
-        if root_obj is not None and hasattr(root_obj, "after"):
-            root_obj.after(120, _netops_tts_isit)
-        else:
-            _netops_tts_isit()
-    except Exception:
-        pass
+    if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+        try:
+            root_obj = globals().get("root")
+            if root_obj is not None and hasattr(root_obj, "after"):
+                root_obj.after(120, _netops_tts_isit)
+            else:
+                _netops_tts_isit()
+        except Exception:
+            pass
 
     def _uygula():
         try:
@@ -4117,6 +4349,26 @@ def _netops_device_hub_module():
         return None
 
 
+def neto_startup_status_snapshot():
+    """Return a lightweight, failure-safe status for the startup splash."""
+    payload = {
+        "status": "Yerel çekirdek hazır",
+        "devices": 0,
+        "connected": False,
+    }
+    try:
+        mod = _netops_device_hub_module()
+        snapshot = mod.device_hub_snapshot() if mod is not None else {}
+        devices = [item for item in (snapshot.get("devices") or []) if isinstance(item, dict)]
+        payload["devices"] = sum(1 for item in devices if item.get("online"))
+        payload["connected"] = bool(snapshot.get("running"))
+        if payload["connected"]:
+            payload["status"] = "Cihaz köprüsü hazır"
+    except Exception:
+        pass
+    return payload
+
+
 def _netops_tablet_audio_stream_path() -> str:
     global _NETOPS_TABLET_AUDIO_STREAM_PATH
     if _NETOPS_TABLET_AUDIO_STREAM_PATH:
@@ -4677,11 +4929,174 @@ def netops_one_now_playing_status_text():
         )
 
 
+def _netops_builtin_skill_answer(text: str, device_id: str = ""):
+    """Use the shared read-only skill catalog for desktop and remote chat."""
+    try:
+        import neto_builtin_skills
+
+        def _device_summary() -> str:
+            mod = _netops_device_hub_module()
+            try:
+                snapshot = mod.device_hub_snapshot() if mod is not None else {}
+            except Exception:
+                snapshot = {}
+            devices = [item for item in (snapshot.get("devices") or []) if isinstance(item, dict)]
+            online = [item for item in devices if item.get("online")]
+            if not devices:
+                return "Kayıtlı bağlı cihaz yok."
+            names = ", ".join(
+                str(item.get("display_name") or item.get("device_name") or item.get("device_id") or "Cihaz")
+                for item in (online or devices)
+            )
+            return f"{len(online)} cihaz online. {names}."
+
+        return neto_builtin_skills.handle(
+            str(text or ""),
+            metrics_provider=lambda: neto_system_metrics(force=True),
+            media_provider=netops_one_now_playing_status_text,
+            device_provider=_device_summary,
+        )
+    except Exception as exc:
+        try:
+            print(f"[BUILTIN_SKILL_ERROR] {exc}", flush=True)
+        except Exception:
+            pass
+        return None
+
+
+def now_playing_get_max_seconds():
+    """Return the configured idle timeout for the Now Playing surface."""
+    try:
+        return int(veri_yukle().get("now_playing_max_seconds", 1800))
+    except Exception:
+        return 1800
+
+
+def now_playing_set_max_seconds(seconds):
+    """Persist a safe Now Playing timeout shared by every UI surface."""
+    try:
+        seconds = max(10, min(7200, int(seconds)))
+        settings = veri_yukle()
+        settings["now_playing_max_seconds"] = seconds
+        veri_kaydet(settings)
+        return seconds
+    except Exception:
+        return None
+
+
+def now_playing_ayar_komutu(metin):
+    """Handle Now Playing timeout commands before the native UI starts."""
+    try:
+        normalized = str(metin or "").lower()
+        if not any(token in normalized for token in ("çalıyor", "sarki", "şarkı", "muzik", "müzik")):
+            return None
+        if not any(token in normalized for token in ("süre", "sure", "saniye", "dakika", "dk")):
+            return None
+        numbers = re.findall(r"\d+", normalized)
+        if not numbers:
+            return "Süre için sayı söylemelisin. Örnek: Şu an çalıyor süresi 30 dakika."
+        value = int(numbers[0])
+        seconds = value * 60 if ("dakika" in normalized or "dk" in normalized) else value
+        result = now_playing_set_max_seconds(seconds)
+        if result:
+            if result >= 60:
+                return f"Şu An Çalıyor ekran süresi {result // 60} dakika yapıldı."
+            return f"Şu An Çalıyor ekran süresi {result} saniye yapıldı."
+        return "Şu An Çalıyor süresi ayarlanamadı."
+    except Exception as exc:
+        return f"Şu An Çalıyor ayar hatası: {exc}"
+
+
 def lokal_sistem_islemcisi(komut_metni):
     global ogrenme_modu, onay_modu, son_soru, _NETO_AUTOPILOT_PENDING  # Global değişkenleri fonksiyon başında tanımla
 
     k = komut_metni.lower().strip()
     h_ayar = veri_yukle()
+
+    # Recovery requests use the same authenticated confirmation path for local
+    # chat and the phone bridge. The main window stays visible until approval.
+    try:
+        recovery_route = neto_recovery_assistant_request(komut_metni)
+        if recovery_route is not None:
+            return str(recovery_route.get("display_text") or "Recovery komutu işlendi.")
+    except Exception as recovery_error:
+        return f"Recovery Mode kontrolü başarısız: {recovery_error}"
+
+    # The virtual desktop is an explicit local command, not an AI or network
+    # request. Keep it ahead of generic routing so a missing QEMU never closes
+    # or blocks the main NetOps window.
+    try:
+        import neto_virtual_desktop
+
+        virtual_result = neto_virtual_desktop.handle_command(
+            komut_metni,
+            manager=neto_virtual_desktop.get_manager(Path(__file__).resolve().parent),
+        )
+        if virtual_result is not None:
+            return neto_virtual_desktop.format_result(virtual_result)
+    except Exception as virtual_desktop_error:
+        return f"Sanal masaustu kontrolu calismadi: {virtual_desktop_error}"
+
+    # Hidden but explicit recovery phrase: it is not shown as a UI action and
+    # only restores a verified file-level update backup.
+    try:
+        import neto_system_updater
+        rollback = neto_system_updater.hidden_rollback_command(k)
+        if rollback is not None:
+            if rollback.get("ok"):
+                close_app = globals().get("_neto_tam_kapat")
+                app_root = globals().get("root")
+                if callable(close_app) and app_root is not None:
+                    try:
+                        app_root.after(700, close_app)
+                    except Exception:
+                        close_app()
+            return str(rollback.get("message") or "Geri alma sonucu yok.")
+    except Exception as exc:
+        return f"Geri alma kontrolu basarisiz: {exc}"
+
+    if any(phrase in k for phrase in ("operasyon geçmişi", "operasyon gecmisi", "son operasyon", "son işlemi göster", "son islemi goster")):
+        try:
+            import neto_operation_loop
+
+            record = neto_operation_loop.last_operation()
+            if not record:
+                return "Henüz kaydedilmiş bir NetOps operasyonu yok."
+            verification = record.get("verification") or {}
+            verification_text = {
+                "verified": "doğrulandı",
+                "partial": "kısmen doğrulandı",
+                "failed": "doğrulanamadı",
+            }.get(str(verification.get("status")), "kontrol edilmedi")
+            return (
+                f"Son NetOps operasyonu: {record.get('goal') or 'isimsiz'}\n"
+                f"Durum: {record.get('status', 'bilinmiyor')}\n"
+                f"Doğrulama: {verification_text}\n"
+                f"Kimlik: {record.get('operation_id', 'yok')}"
+            )
+        except Exception as exc:
+            return f"Operasyon geçmişi okunamadı: {exc}"
+
+    if any(phrase in k for phrase in ("sistem ikizi", "sistem haritası", "sistem haritasi", "cihaz haritası", "cihaz haritasi")):
+        try:
+            import neto_system_twin
+
+            return neto_system_twin.format_snapshot(neto_system_twin.collect_snapshot())
+        except Exception as exc:
+            return f"Sistem İkizi okunamadı: {exc}"
+
+    if _NETOPS_LEGACY_FEATURES["windows_session_bridge"] and any(
+        phrase in k for phrase in (
+            "akıllı sisteme al", "akilli sisteme al",
+            "netops oturumuna geç", "netops oturumuna gec",
+        )
+    ):
+        try:
+            import neto_windows_session_bridge
+
+            return str(neto_windows_session_bridge.switch_to_netops_session().get("message") or "NetOps oturum geçişi hazır değil.")
+        except Exception as exc:
+            return f"NetOps Windows oturumu başlatılamadı: {exc}"
 
     if onay_modu:
         yanit = k.strip(" \t\r\n.!?")
@@ -4701,7 +5116,11 @@ def lokal_sistem_islemcisi(komut_metni):
             _NETO_AUTOPILOT_PENDING = None
             try:
                 import neto_autopilot
-                return neto_autopilot.execute(bekleyen, adapters=_neto_scene_adapters())
+                return neto_autopilot.execute(
+                    bekleyen,
+                    adapters=_neto_scene_adapters(),
+                    confirmed=True,
+                )
             except Exception as exc:
                 return f"Neto Autopilot çalıştırılamadı: {exc}"
         if yanit in {"hayır", "hayir", "h", "iptal", "vazgeç", "vazgec", "no", "n", "cancel"}:
@@ -4724,6 +5143,59 @@ def lokal_sistem_islemcisi(komut_metni):
     tehlikeli_kelimeler = neto_security.dangerous_command_words(komut_metni)
     if tehlikeli_kelimeler:
         return "🛡️ Güvenlik nedeniyle reddedildi: " + ", ".join(tehlikeli_kelimeler)
+
+    builtin_skill_answer = _netops_builtin_skill_answer(komut_metni)
+    if builtin_skill_answer is not None:
+        return builtin_skill_answer
+
+    if any(phrase in k for phrase in ("pdf oluştur", "pdf olustur", "raporu pdf yap", "raporu pdf'e çevir", "raporu pdf'e cevir")):
+        try:
+            from neto_pdf_report import write_report_pdf
+
+            result = write_report_pdf(Path(__file__).resolve().parent)
+            return f"PDF raporu hazır: {result.get('path')}"
+        except Exception as exc:
+            return f"PDF raporu oluşturulamadı: {exc}"
+
+    if any(phrase in k for phrase in ("hata sayısı", "hata sayisi", "kritik hata", "hataları bul", "hatalari bul", "logları tara", "loglari tara")):
+        try:
+            from neto_error_detection_agent import NetOpsErrorDetectionAgent
+
+            report = NetOpsErrorDetectionAgent(Path(__file__).resolve().parent).run()
+            try:
+                from neto_pdf_report import write_report_pdf
+
+                pdf_path = write_report_pdf(Path(__file__).resolve().parent).get("path")
+                return f"{report.summary()}\nPDF raporu hazır: {pdf_path}"
+            except Exception:
+                lines = [report.summary()]
+                for finding in report.findings[:5]:
+                    lines.append(f"- {finding.severity}: {finding.source}:{finding.line} · {finding.message}")
+                return "\n".join(lines)
+        except Exception as exc:
+            return f"Hata taraması çalışmadı: {exc}"
+
+    if any(phrase in k for phrase in ("arayüzü denetle", "arayuzu denetle", "arayüz kontrolü", "arayuz kontrolu", "ui kontrol")):
+        try:
+            from neto_ui_guard_agent import NetOpsUIGuardAgent
+
+            report = NetOpsUIGuardAgent(Path(__file__).resolve().parent).run()
+            try:
+                from neto_pdf_report import write_report_pdf
+
+                pdf_path = write_report_pdf(Path(__file__).resolve().parent).get("path")
+                if report.ok:
+                    return f"Arayüz kontrolü temiz. {report.checks} kontrol tamamlandı.\nPDF raporu hazır: {pdf_path}"
+                return f"Arayüz kontrolünde {report.error_count} hata ve {len(report.warnings)} uyarı bulundu.\nPDF raporu hazır: {pdf_path}"
+            except Exception:
+                if report.ok:
+                    return f"Arayüz kontrolü temiz. {report.checks} kontrol tamamlandı."
+                return (
+                    f"Arayüz kontrolünde {report.error_count} hata ve {len(report.warnings)} uyarı bulundu.\n"
+                    + "\n".join(f"- {item}" for item in report.errors[:5])
+                )
+        except Exception as exc:
+            return f"Arayüz kontrolü çalışmadı: {exc}"
 
     
     # Genel sohbet ve web bilgisi kanonik NetOpsOneEngine'e bırakılır.
@@ -5134,13 +5606,20 @@ def lokal_sistem_islemcisi(komut_metni):
             return f"Görev kapatma reddedildi/başarısız: {detay}"
 
     # --- DOSYA OLUŞTURMA ---
-    if "dosya oluştur" in k or "metin belgesi aç" in k:
-        dosya_adi = neto_security.sanitize_filename(komut_metni.replace("dosya oluştur", "").replace("metin belgesi aç", "").strip() or f"Neto_Not_{int(time.time())}")
+    if any(phrase in k for phrase in ("dosya oluştur", "dosya olustur", "dosya yaz", "metin belgesi aç", "metin belgesi ac")):
         try:
-            tam_yol = os.path.join(os.path.expanduser("~"), "Desktop", f"{dosya_adi}.txt")
-            with open(tam_yol, "w", encoding="utf-8") as f: f.write("NetOps Notu\n")
-            return f"Masaüstünde '{dosya_adi}.txt' başarıyla oluşturuldu."
-        except Exception as e: return f"Hata: {e}"
+            from neto_local_agent_runner import NetOpsLocalAgentRunner
+
+            desktop = Path.home() / "Desktop"
+            desktop.mkdir(parents=True, exist_ok=True)
+            result = NetOpsLocalAgentRunner(desktop).create_text_file_from_command(
+                komut_metni,
+                approved=True,
+            )
+            relative = result.data.get("path", "dosya")
+            return f"Masaüstünde '{relative}' başarıyla oluşturuldu."
+        except Exception as e:
+            return f"Dosya oluşturulamadı: {e}"
 
     # 🧠 Hiçbir komut eşleşmezse NetOps Agent devreye girer
     ai_cevap = neto_ai_cevap_ver(komut_metni)
@@ -5196,10 +5675,164 @@ def lokal_sistem_islemcisi(komut_metni):
     return ai_cevap
 
 
+def _netops_remote_command_answer(text: str, device_id: str = ""):
+    """Resolve unambiguous phone shortcuts before the broad local intent engine."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+    if not normalized:
+        return None
+
+    # Remote commands must use the virtual-desktop router before the generic
+    # Windows "Masaüstünü aç" shortcut, otherwise a QEMU request opens Explorer.
+    try:
+        import neto_virtual_desktop
+
+        virtual_result = neto_virtual_desktop.handle_command(
+            text,
+            manager=neto_virtual_desktop.get_manager(Path(__file__).resolve().parent),
+        )
+        if virtual_result is not None:
+            return neto_virtual_desktop.format_result(virtual_result)
+    except Exception:
+        pass
+
+    # Keep short media commands deterministic. A bare "şarkı oynat" means
+    # control the current player; a command with a title continues to the
+    # music-search path below.
+    media_action = None
+    if normalized in {
+        "oynat", "duraklat", "çal", "cal", "başlat", "baslat", "devam", "devam et",
+        "şarkı oynat", "sarki oynat", "şarkıyı oynat", "sarkiyi oynat",
+        "müzik oynat", "muzik oynat", "şarkı çal", "sarki cal",
+        "oynat/duraklat", "oynat-duraklat", "play", "play-pause",
+    }:
+        media_action = "play_pause"
+    elif normalized in {"sonraki", "sonraki parça", "sonraki şarkı", "next"}:
+        media_action = "next"
+    elif normalized in {"önceki", "önceki parça", "önceki şarkı", "onceki", "previous"}:
+        media_action = "previous"
+    if media_action:
+        try:
+            media_result = neto_remote_media_request(media_action, device_id=device_id)
+            if media_result.get("ok"):
+                return str(media_result.get("display_text") or "Medya komutu uygulandı.")
+            return "Aktif bir medya oynatıcısı bulunamadı. Önce bir şarkı açmayı dene."
+        except Exception as exc:
+            try:
+                now_playing_log(f"[REMOTE_MEDIA_SHORTCUT_ERROR] {media_action}: {exc}")
+            except Exception:
+                pass
+            return "Medya komutu uygulanamadı. Oynatıcıyı kontrol et."
+
+    try:
+        from neto_remote_pc_actions import command_catalog_text, handle_remote_pc_command
+
+        if normalized in {"pc komutları", "pc komutlari", "bilgisayar komutları", "bilgisayar komutlari"}:
+            return command_catalog_text()
+        pc_action = handle_remote_pc_command(normalized)
+        if pc_action is not None:
+            if pc_action.get("ok"):
+                if pc_action.get("title"):
+                    return f"PC'de {pc_action['title']} açıldı."
+                if pc_action.get("folder"):
+                    return f"PC klasörü açıldı: {pc_action['folder']}"
+                if pc_action.get("action") == "lock":
+                    return "PC kilitlendi."
+                return "PC komutu uygulandı."
+            errors = {
+                "PROGRAM_NOT_ALLOWED": "Bu program güvenlik allowlist'inde yok.",
+                "PROGRAM_NOT_INSTALLED": f"{pc_action.get('title', 'Program')} bulunamadı.",
+                "WINDOWS_ONLY": "Bu PC komutu yalnızca Windows'ta çalışır.",
+            }
+            return errors.get(str(pc_action.get("error")), "PC komutu çalıştırılamadı.")
+    except Exception:
+        pass
+
+    if re.search(r"\b(?:ram|bellek|cpu|işlemci)\b", normalized) or any(
+        key in normalized for key in ("sistem durumu", "sistem bilgisi")
+    ):
+        metrics = neto_system_metrics(force=True)
+        return (
+            f"CPU %{float(metrics.get('cpu', 0) or 0):.0f} • "
+            f"RAM %{float(metrics.get('ram', 0) or 0):.0f} "
+            f"({float(metrics.get('ram_used_gb', 0) or 0):.1f}/"
+            f"{float(metrics.get('ram_total_gb', 0) or 0):.1f} GB)"
+        )
+
+    if normalized in {"yardım", "komutlar", "komut listesi", "ne yapabilirsin"} or "komutlarını göster" in normalized:
+        return (
+            "Komutlar: sistem durumu, RAM durumu, CPU durumu, bağlı cihazlar, "
+            "şimdi çalan, oynat/duraklat, sonraki, önceki, ses 0-100, "
+            "PC komutları, Chrome aç, Edge aç, VS Code aç, Spotify aç, "
+            "Not Defteri aç, Hesap Makinesi aç, Explorer aç, Masaüstünü aç, "
+            "Belgeleri aç, İndirilenler aç, PC kilitle, merhaba ve normal sohbet."
+        )
+
+    if any(key in normalized for key in ("bağlı cihaz", "cihazları göster", "cihaz listesi")):
+        mod = _netops_device_hub_module()
+        try:
+            snapshot = mod.device_hub_snapshot() if mod is not None else {}
+        except Exception:
+            snapshot = {}
+        devices = [item for item in (snapshot.get("devices") or []) if isinstance(item, dict)]
+        online = [item for item in devices if item.get("online")]
+        if not devices:
+            return "Kayıtlı bağlı cihaz yok."
+        names = ", ".join(
+            str(item.get("display_name") or item.get("device_name") or item.get("device_id") or "Cihaz")
+            for item in (online or devices)
+        )
+        return f"{len(online)} cihaz online. {names}."
+
+    return None
+
+
+def neto_remote_input_request(key, modifiers=None, device_id=""):
+    """Handle the small, allowlisted phone keyboard/control surface."""
+    try:
+        from neto_remote_pc_actions import handle_remote_input
+
+        result = handle_remote_input(key, modifiers)
+        if result.get("ok"):
+            if result.get("program"):
+                return {**result, "display_text": f"PC'de {result.get('title', 'uygulama')} açıldı."}
+            return {**result, "display_text": f"PC tuşu uygulandı: {result.get('key', key)}"}
+        errors = {
+            "INPUT_KEY_NOT_ALLOWED": "Bu tuş NetOps güvenli kontrol listesinde yok.",
+            "INPUT_MODIFIERS_NOT_ALLOWED": "Klavye kombinasyonları bu modda kapalı.",
+            "INPUT_SEND_FAILED": "PC tuşu gönderilemedi.",
+            "PROGRAM_NOT_INSTALLED": f"{result.get('title', 'Uygulama')} bulunamadı.",
+        }
+        return {**result, "display_text": errors.get(str(result.get("error")), "Telefon kontrolü uygulanamadı.")}
+    except Exception as exc:
+        try:
+            crash_guard.log(f"[REMOTE_INPUT_REQUEST_ERROR] {exc}")
+        except Exception:
+            pass
+        return {"ok": False, "error": "REMOTE_INPUT_REQUEST_FAILED", "display_text": "Telefon kontrolü kullanılamıyor."}
+
+
+def _neto_command_arena_record(command, source, result):
+    """Mirror remote outcomes into the read-only Command Arena feed."""
+    try:
+        mod = _neto_lazy_import("neto_command_arena")
+        mod.record_command(command, source or "Telefon", result)
+    except Exception:
+        pass
+
+
 def neto_remote_assistant_request(text, device_id=""):
     """Serve an authenticated Android chat request through the existing engine."""
     try:
-        answer = lokal_sistem_islemcisi(str(text or "").strip())
+        recovery_answer = neto_recovery_assistant_request(text, device_id)
+        if recovery_answer is not None:
+            return recovery_answer
+        builtin_answer = _netops_builtin_skill_answer(str(text or ""), device_id)
+        remote_answer = _netops_remote_command_answer(str(text or ""), device_id)
+        answer = (
+            builtin_answer
+            if builtin_answer is not None
+            else (remote_answer if remote_answer is not None else lokal_sistem_islemcisi(str(text or "").strip()))
+        )
         return {
             "ok": True,
             "display_text": komut_token_temizle(str(answer or "Bir yanıt oluşturulamadı.")),
@@ -5258,12 +5891,24 @@ def neto_remote_media_request(action, args=None, device_id=""):
 def neto_remote_assistant_request(text, device_id=""):
     """Serve an authenticated Android chat request through the existing engine."""
     try:
-        answer = lokal_sistem_islemcisi(str(text or "").strip())
-        return {
+        recovery_answer = neto_recovery_assistant_request(text, device_id)
+        if recovery_answer is not None:
+            _neto_command_arena_record(text, device_id or "Telefon", recovery_answer)
+            return recovery_answer
+        builtin_answer = _netops_builtin_skill_answer(str(text or ""), device_id)
+        remote_answer = _netops_remote_command_answer(str(text or ""), device_id)
+        answer = (
+            builtin_answer
+            if builtin_answer is not None
+            else (remote_answer if remote_answer is not None else lokal_sistem_islemcisi(str(text or "").strip()))
+        )
+        result = {
             "ok": True,
             "display_text": komut_token_temizle(str(answer or "Bir yanıt oluşturulamadı.")),
             "device_id": str(device_id or ""),
         }
+        _neto_command_arena_record(text, device_id or "Telefon", result)
+        return result
     except Exception as exc:
         try:
             crash_guard.log(f"[REMOTE_ASSISTANT_REQUEST_ERROR] {exc}")
@@ -5917,6 +6562,13 @@ def _neto_agent_modu_metin(tr_text: str, en_text: str) -> str:
 def _neto_agent_modu_guncelle(acik: bool, duyuru: bool = True) -> None:
     globals()["_NETO_AGENT_MODU"] = bool(acik)
     try:
+        settings = veri_yukle()
+        if bool(settings.get("netops_agent_mode", False)) != bool(acik):
+            settings["netops_agent_mode"] = bool(acik)
+            veri_kaydet(settings)
+    except Exception:
+        pass
+    try:
         _neto_agent_panellerini_guncelle = globals().get("_neto_agent_panellerini_guncelle")
         if callable(_neto_agent_panellerini_guncelle):
             _neto_agent_panellerini_guncelle(acik)
@@ -5951,11 +6603,76 @@ def _neto_agent_modu_guncelle(acik: bool, duyuru: bool = True) -> None:
 
 
 def _neto_sohbet_modu_odakla(event=None):
-    """Barı tıklayınca sohbet modunda kal ve yazı alanına odaklan."""
-    _neto_agent_modu_guncelle(False, duyuru=False)
+    """Barı tıklayınca yazı alanına odaklan; Agent modu kullanıcı kapatır."""
     try:
         if "giris" in globals() and giris.winfo_exists():
             _neto_widget_focus_guvenli(giris, kaynak="sohbet_modu_odakla")
+    except Exception:
+        pass
+
+
+def _neto_agent_yuzeyi_ac():
+    """Show a clean NetOps welcome surface for the local Agent mode.
+
+    The coding runner remains available internally, but it is not the Agent
+    mode's first screen. This keeps the main experience focused on the logo and
+    avoids exposing implementation cards before the user asks for a task.
+    """
+    try:
+        closer = globals().get("_neto_workspace_close_external")
+        if callable(closer) and globals().get("_neto_workspace_state", {}).get("surface") is not None:
+            closer(False)
+    except Exception:
+        pass
+    try:
+        chat = globals().get("chat_container")
+        if chat is not None and chat.winfo_exists() and chat.winfo_manager() != "pack":
+            chat.pack(side="top", expand=True, fill="both", padx=24, pady=(12, 6))
+
+        shell = globals().get("chat_bubble_shell")
+        if shell is not None and shell.winfo_exists():
+            shell.pack_forget()
+
+        # Rebuild only the existing hero widgets; no new screen or AI message
+        # is created when Agent mode is entered.
+        for name, options in (
+            ("gif_ana_label", {"pady": (0, 10)}),
+            ("lbl_welcome", {"pady": 10}),
+            ("hero_kicker", {"pady": (0, 2)}),
+            ("hero_status_frame", {"pady": (8, 0)}),
+        ):
+            widget = globals().get(name)
+            if widget is not None and widget.winfo_exists() and not widget.winfo_manager():
+                widget.pack(**options)
+
+        status_label = globals().get("etiket")
+        if status_label is not None and status_label.winfo_exists():
+            status_label.configure(text=T("main_hello"))
+
+        restore = globals().get("_neto_input_bar_konumla")
+        if callable(restore):
+            restore()
+    except Exception as exc:
+        try:
+            print(f"[LOCAL_AGENT_SURFACE_ERROR] {exc}", flush=True)
+        except Exception:
+            pass
+
+
+def _neto_agent_yuzeyi_kapat():
+    closer = globals().get("_neto_workspace_close_external")
+    if callable(closer):
+        try:
+            closer(False)
+        except Exception:
+            pass
+    try:
+        input_bar = globals().get("input_container")
+        if input_bar is not None and input_bar.winfo_manager() == "place":
+            input_bar.place_forget()
+        restore = globals().get("_neto_input_bar_konumla")
+        if callable(restore):
+            restore()
     except Exception:
         pass
 
@@ -6489,6 +7206,7 @@ def _neto_vpn_izleyicisini_baslat():
 
 def _neto_agent_modu_ac(duyuru: bool = True) -> None:
     _neto_agent_modu_guncelle(True, duyuru=duyuru)
+    _neto_agent_yuzeyi_ac()
     try:
         if "giris" in globals() and giris.winfo_exists():
             _neto_widget_focus_guvenli(giris, kaynak="agent_modu_ac")
@@ -6498,6 +7216,7 @@ def _neto_agent_modu_ac(duyuru: bool = True) -> None:
 
 def _neto_agent_modu_kapat(duyuru: bool = True) -> None:
     _neto_agent_modu_guncelle(False, duyuru=duyuru)
+    _neto_agent_yuzeyi_kapat()
     try:
         if "giris" in globals() and giris.winfo_exists():
             _neto_widget_focus_guvenli(giris, kaynak="agent_modu_kapat")
@@ -6543,7 +7262,10 @@ def _neto_agent_uygulama_ac(app_name: str) -> str | None:
             return str(fallback_exc or exc)
 
 
-globals()["_NETO_AGENT_MODU"] = False
+try:
+    globals()["_NETO_AGENT_MODU"] = bool(veri_yukle().get("netops_agent_mode", False))
+except Exception:
+    globals()["_NETO_AGENT_MODU"] = False
 
 
 def _neto_autopilot_intercept(text: str) -> bool:
@@ -6586,22 +7308,34 @@ def _neto_autopilot_intercept(text: str) -> bool:
         return "autopilot" in folded or "hazırla" in folded or "hazirla" in folded
 
 
+def _neto_agent_aktivasyon_komutu(value: str) -> bool:
+    """Accept the private agent entry commands without exposing the core name."""
+    if not _NETOPS_LEGACY_FEATURES["hidden_axvord_mode"]:
+        return False
+    try:
+        from neto_axvord_core import is_activation_command
+
+        return bool(is_activation_command(value))
+    except Exception:
+        return " ".join(str(value or "").casefold().split()) in {".agent", "agent"}
+
+
 def cevap_ver():
-    global ogrenme_modu, onay_modu, son_soru, secili_resim_yolu
+    global ogrenme_modu, onay_modu, son_soru, secili_resim_yolu, _NETO_PENDING_FILE_COMMAND
 
     try:
         cevap_baslangic = time.perf_counter()
         m = giris.get().strip()
         m_kucuk = m.casefold().strip()
 
-        if m_kucuk == ".agent":
+        if _neto_agent_aktivasyon_komutu(m_kucuk):
             giris.delete(0, tk.END)
-            _neto_agent_modu_ac()
+            _neto_agent_modu_ac(duyuru=False)
             return
 
         if m_kucuk == "n.ext":
             giris.delete(0, tk.END)
-            _neto_agent_modu_kapat()
+            _neto_agent_modu_kapat(duyuru=False)
             return
 
         # Autopilot is a local control-plane command. Detect it BEFORE the
@@ -6632,11 +7366,33 @@ def cevap_ver():
             return
         giris.delete(0, tk.END)
         thinking_row = None
+        thinking_state = {"active": True, "index": 0}
         try:
             _neto_sohbet_balonu_ekle(m, "user")
-            thinking_row = None
+            thinking_row = _neto_sohbet_balonu_ekle("NetOps düşünüyor...", "thinking")
         except Exception:
             thinking_row = None
+
+        def dusunme_geri_bildirimi():
+            if not thinking_state["active"]:
+                return
+            messages = (
+                "NetOps düşünüyor...",
+                "Bağlamı ve ilgili araçları kontrol ediyor...",
+                "Yanıtı hazırlıyor ve güvenlik kontrollerini yapıyor...",
+            )
+            index = thinking_state["index"] % len(messages)
+            _neto_sohbet_dusunme_metni_guncelle(thinking_row, messages[index])
+            thinking_state["index"] += 1
+            try:
+                root.after(1250, dusunme_geri_bildirimi)
+            except Exception:
+                pass
+
+        try:
+            root.after(1250, dusunme_geri_bildirimi)
+        except Exception:
+            pass
 
         try:
             giris.configure(state="disabled")
@@ -6675,11 +7431,62 @@ def cevap_ver():
                         cevap = "İnternet kapatıldı."
                     else:
                         try:
-                            if m_kucuk.startswith(("hangi ilaç", "hangi ilac", "hangi araç", "hangi arac", "hangi araba", "hangi otomobil")):
-                                neto_ai.internet_durum_ayarla(True)
-                        except Exception:
-                            pass
-                        cevap = neto_ai.neto_ai_cevap_ver(m, agent_modu=True)
+                            from neto_axvord_core import AxvordCore
+
+                            _agent_workspace = os.path.dirname(os.path.abspath(__file__))
+                            _agent_permissions = None
+                            try:
+                                from neto_runtime_core import get_runtime as _neto_get_runtime_for_agent
+
+                                _agent_permissions = _neto_get_runtime_for_agent().permissions
+                            except Exception:
+                                pass
+                            _axvord = AxvordCore(
+                                _agent_workspace,
+                                permission_manager=_agent_permissions,
+                            )
+                            pending_file = globals().get("_NETO_PENDING_FILE_COMMAND")
+                            approval_words = {"evet", "e", "onayla", "onaylıyorum", "onayliyorum", "yes", "y"}
+                            cancel_words = {"hayır", "hayir", "h", "iptal", "vazgeç", "vazgec", "no", "n"}
+                            if pending_file and m_kucuk in approval_words:
+                                _tool_result = _axvord.dispatch(pending_file, approved=True)
+                                _NETO_PENDING_FILE_COMMAND = None
+                            elif pending_file and m_kucuk in cancel_words:
+                                _tool_result = {
+                                    "handled": True,
+                                    "ok": True,
+                                    "message": "Bekleyen dosya oluşturma işlemi iptal edildi.",
+                                }
+                                _NETO_PENDING_FILE_COMMAND = None
+                            else:
+                                _tool_result = _axvord.dispatch(m)
+                                if _tool_result.get("approval_required") and any(
+                                    word in m_kucuk
+                                    for word in ("dosya oluştur", "dosya olustur", "dosya yaz", "not kaydet", "pdf oluştur", "pdf olustur", "raporu pdf")
+                                ):
+                                    _NETO_PENDING_FILE_COMMAND = m
+                            if _tool_result.get("handled"):
+                                _tool_data = _tool_result.get("data") or {}
+                                if "cpu_percent" in _tool_data:
+                                    cevap = (
+                                        "Sistem durumu: "
+                                        f"CPU %{_tool_data.get('cpu_percent', '?')}, "
+                                        f"RAM %{_tool_data.get('ram_percent', '?')}."
+                                    )
+                                elif "processes" in _tool_data:
+                                    _names = [str(item.get("name", "?")) for item in _tool_data["processes"][:8]]
+                                    cevap = "Çalışan işlemler: " + (", ".join(_names) or "okunamadı")
+                                elif _tool_result.get("approval_required"):
+                                    cevap = str(_tool_result.get("message") or "Bu işlem için onay gerekiyor.")
+                                else:
+                                    cevap = str(_tool_result.get("message") or "Güvenli agent aracı tamamlandı.")
+                            else:
+                                cevap = _axvord.analyze(m, timeout=240)
+                        except Exception as local_agent_error:
+                            cevap = (
+                                "Yerel Kod AI çalışamadı veya hazır değil. "
+                                f"Ayrıntı: {local_agent_error}"
+                            )
                 else:
                     cevap = lokal_sistem_islemcisi(m)
                     try:
@@ -6699,6 +7506,7 @@ def cevap_ver():
 
             def ui_guncelle():
                 try:
+                    thinking_state["active"] = False
                     try:
                         _neto_sohbet_mesaj_sil(thinking_row)
                     except Exception:
@@ -6787,10 +7595,177 @@ def neto_android_device_ac_safe(crash_alert_log=None):
             print(e)
 
 
+def neto_recovery_surface_launch_safe():
+    """Hide the main UI and enter the authenticated Recovery Mode surface."""
+    global _NETO_RECOVERY_MODE, _NETO_RECOVERY_LAUNCH_PENDING, _NETO_RECOVERY_CONFIRMATION_PENDING
+    if _NETO_RECOVERY_MODE or _NETO_RECOVERY_LAUNCH_PENDING:
+        return True
+    app_root = globals().get("root")
+    if app_root is None:
+        return False
+    try:
+        from neto_recovery_surface import open_recovery_surface, show_recovery_transition
+
+        # Chat and Device Hub requests can run on worker threads. Tk widgets
+        # must only be touched by the main event loop, so defer every mutation.
+        _NETO_RECOVERY_LAUNCH_PENDING = True
+
+        def _open_recovery():
+            global _NETO_RECOVERY_MODE, _NETO_RECOVERY_LAUNCH_PENDING
+            try:
+                _NETO_RECOVERY_MODE = True
+                app_root.withdraw()
+
+                def _recovery_closed():
+                    global _NETO_RECOVERY_MODE, _NETO_RECOVERY_LAUNCH_PENDING, _NETO_RECOVERY_CONFIRMATION_PENDING
+                    _NETO_RECOVERY_MODE = False
+                    _NETO_RECOVERY_LAUNCH_PENDING = False
+                    _NETO_RECOVERY_CONFIRMATION_PENDING = False
+
+                def _open_surface_after_transition():
+                    open_recovery_surface(
+                        app_root,
+                        Path(__file__).resolve().parent,
+                        on_close=_recovery_closed,
+                    )
+
+                show_recovery_transition(
+                    app_root,
+                    Path(__file__).resolve().parent,
+                    _open_surface_after_transition,
+                    duration_ms=3000,
+                )
+            except Exception as exc:
+                _NETO_RECOVERY_MODE = False
+                _NETO_RECOVERY_LAUNCH_PENDING = False
+                _NETO_RECOVERY_CONFIRMATION_PENDING = False
+                try:
+                    app_root.deiconify()
+                    messagebox.showerror("Recovery NetOps", f"Recovery Mode açılamadı:\n{exc}", parent=app_root)
+                except Exception:
+                    print(f"[RECOVERY_SURFACE_ERROR] {exc}", flush=True)
+
+        app_root.after(0, _open_recovery)
+        return True
+    except Exception as exc:
+        _NETO_RECOVERY_LAUNCH_PENDING = False
+        _NETO_RECOVERY_MODE = False
+        _NETO_RECOVERY_CONFIRMATION_PENDING = False
+        try:
+            app_root.deiconify()
+            messagebox.showerror("Recovery NetOps", f"Recovery Mode açılamadı:\n{exc}", parent=app_root)
+        except Exception:
+            print(f"[RECOVERY_SURFACE_ERROR] {exc}", flush=True)
+        return False
+
+
+def neto_recovery_assistant_request(text, device_id=""):
+    """Route authenticated phone messages to Recovery Mode when active."""
+    global _NETO_RECOVERY_CONFIRMATION_PENDING
+    try:
+        from neto_recovery_surface import (
+            is_recovery_cancellation,
+            is_recovery_confirmation,
+            is_recovery_command,
+            is_recovery_exit,
+            recovery_command_answer,
+            recovery_confirmation_prompt,
+            record_event,
+            request_recovery_close,
+        )
+
+        value = str(text or "").strip()
+        if is_recovery_command(value):
+            if globals().get("_NETO_RECOVERY_MODE", False):
+                return {
+                    "ok": True,
+                    "display_text": "Recovery NetOps zaten açık.",
+                    "device_id": str(device_id or ""),
+                }
+            _NETO_RECOVERY_CONFIRMATION_PENDING = True
+            prompt = recovery_confirmation_prompt()
+            record_event(prompt)
+            return {
+                "ok": True,
+                "display_text": prompt,
+                "device_id": str(device_id or ""),
+            }
+
+        if is_recovery_confirmation(value):
+            if not _NETO_RECOVERY_CONFIRMATION_PENDING:
+                return {
+                    "ok": False,
+                    "error": "RECOVERY_CONFIRMATION_NOT_PENDING",
+                    "display_text": "Bekleyen bir Recovery isteği yok.",
+                    "device_id": str(device_id or ""),
+                }
+            _NETO_RECOVERY_CONFIRMATION_PENDING = False
+            try:
+                from neto_sound_manager import play_sound_async
+
+                sound_played = play_sound_async("recovery_warning", Path(__file__).resolve().parent)
+            except Exception:
+                sound_played = False
+            launched = neto_recovery_surface_launch_safe()
+            if not launched:
+                _NETO_RECOVERY_CONFIRMATION_PENDING = False
+                return {
+                    "ok": False,
+                    "error": "RECOVERY_SURFACE_UNAVAILABLE",
+                    "display_text": "Recovery yüzeyi açılamadı; ana NetOps ekranı açık bırakıldı.",
+                    "device_id": str(device_id or ""),
+                }
+            sound_text = " Uyarı sesi çalındı." if sound_played else " Uyarı sesi bulunamadı; geçiş yine de yapıldı."
+            return {
+                "ok": True,
+                "display_text": f"Onay alındı. Recovery NetOps açılıyor; ana ekran gizleniyor.{sound_text}",
+                "device_id": str(device_id or ""),
+            }
+
+        if is_recovery_cancellation(value):
+            had_pending = _NETO_RECOVERY_CONFIRMATION_PENDING
+            _NETO_RECOVERY_CONFIRMATION_PENDING = False
+            return {
+                "ok": True,
+                "display_text": "Recovery isteği iptal edildi." if had_pending else "Bekleyen Recovery isteği yok.",
+                "device_id": str(device_id or ""),
+            }
+
+        if is_recovery_exit(value) and globals().get("_NETO_RECOVERY_MODE", False):
+            record_event("Ana NetOps ekranı isteniyor")
+            if request_recovery_close():
+                return {
+                    "ok": True,
+                    "display_text": "Recovery kapanıyor; ana NetOps ekranı geri getiriliyor.",
+                    "device_id": str(device_id or ""),
+                }
+            return {
+                "ok": False,
+                "error": "RECOVERY_SURFACE_NOT_ACTIVE",
+                "display_text": "Recovery yüzeyi kapanamadı; ana ekran değişmedi.",
+                "device_id": str(device_id or ""),
+            }
+
+        if not globals().get("_NETO_RECOVERY_MODE", False):
+            return None
+        record_event(f"{value or 'boş komut'}")
+        answer = recovery_command_answer(value, Path(__file__).resolve().parent)
+        record_event(answer)
+        return {"ok": True, "display_text": answer, "device_id": str(device_id or "")}
+    except Exception as exc:
+        return {"ok": False, "error": "RECOVERY_REQUEST_FAILED", "display_text": f"Recovery komutu işlenemedi: {exc}"}
+
+
 def neto_device_hub_ac_safe():
-    """Open the NETOPS Android device hub."""
+    """Open the NetOps connected-devices panel."""
     try:
         mod = _neto_lazy_import("neto_device_hub")
+        # Device Hub can be opened while optional background services are off.
+        # Register the same allowlisted handlers here so a paired phone can
+        # use the live assistant and media bridge without enabling watchers.
+        mod.device_hub_set_assistant_handler(neto_remote_assistant_request)
+        mod.device_hub_set_media_handler(neto_remote_media_request)
+        mod.device_hub_set_input_handler(neto_remote_input_request)
         return mod.neto_device_hub_ac_safe(
             parent=root,
             T=T,
@@ -6799,7 +7774,51 @@ def neto_device_hub_ac_safe():
         )
     except Exception as e:
         try:
-            messagebox.showerror("NETOPS Device Hub", f"Device Hub açılamadı:\n{e}")
+            messagebox.showerror("NetOps Remote", f"Remote açılamadı:\n{e}")
+        except Exception:
+            print(e)
+
+
+def neto_remote_surface_launch_safe():
+    """Close the main surface and launch the focused Termux Remote app."""
+    try:
+        if getattr(sys, "frozen", False):
+            command = [sys.executable, "--netops-remote"]
+            working_dir = os.path.dirname(sys.executable)
+        else:
+            command = [sys.executable, os.path.abspath(__file__), "--netops-remote"]
+            working_dir = os.path.dirname(os.path.abspath(__file__))
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            command,
+            cwd=working_dir,
+            close_fds=(os.name != "nt"),
+            creationflags=creation_flags,
+            env={**os.environ, "NETOPS_REMOTE_SURFACE": "1"},
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        try:
+            messagebox.showerror("NetOps Remote", f"Remote açılamadı:\n{exc}", parent=root)
+        except Exception:
+            print(f"[REMOTE_SURFACE_ERROR] {exc}", flush=True)
+        return False
+
+
+def neto_power_center_ac_safe():
+    """Open the local NetOps Power Center dashboard."""
+    try:
+        mod = _neto_lazy_import("neto_power_features")
+        return mod.open_power_center(root, globals())
+    except Exception as e:
+        try:
+            messagebox.showerror("NetOps Güç Merkezi", f"Güç Merkezi açılamadı:\n{e}")
         except Exception:
             print(e)
 
@@ -6813,19 +7832,53 @@ def neto_remote_hub_start_safe():
         mod = _neto_lazy_import("neto_device_hub")
         mod.device_hub_set_assistant_handler(neto_remote_assistant_request)
         mod.device_hub_set_media_handler(neto_remote_media_request)
+        mod.device_hub_set_input_handler(neto_remote_input_request)
         lan_ip = getattr(mod, "_local_ip_address", lambda: "127.0.0.1")()
-        result = mod.device_hub_start(host=lan_ip, port=8765)
+        # Bind all local interfaces so USB adb reverse (127.0.0.1) and the
+        # advertised LAN address can use the same authenticated endpoint.
+        result = mod.device_hub_start(host="0.0.0.0", port=8765)
         if not result.get("ok"):
-            print(f"[REMOTE_HUB_START_ERROR] {result.get('error', 'unknown')}", flush=True)
+            # Mobile bridge is optional at startup. A blocked LAN port must
+            # not look like an application crash or a critical UI failure.
+            print(f"[REMOTE_HUB_START_WARN] {result.get('error', 'unknown')}", flush=True)
         else:
             print(f"[REMOTE_HUB] local PC endpoint={lan_ip}:{result.get('port')}", flush=True)
         return result
     except Exception as exc:
         try:
-            print(f"[REMOTE_HUB_START_ERROR] {exc}", flush=True)
+            print(f"[REMOTE_HUB_START_WARN] {exc}", flush=True)
         except Exception:
             pass
         return {"ok": False, "error": str(exc)}
+
+
+_NETO_REMOTE_HUB_WATCHDOG_LOCK = threading.Lock()
+
+
+def neto_remote_hub_watchdog():
+    """Keep the optional mobile bridge alive without touching the Tk thread."""
+    try:
+        if veri_yukle().get("remote_link_enabled", True) is False:
+            return
+        mod = _neto_lazy_import("neto_device_hub")
+        snapshot = mod.device_hub_snapshot()
+        if snapshot.get("running"):
+            return
+        if not _NETO_REMOTE_HUB_WATCHDOG_LOCK.acquire(blocking=False):
+            return
+
+        def _worker():
+            try:
+                neto_remote_hub_start_safe()
+            finally:
+                _NETO_REMOTE_HUB_WATCHDOG_LOCK.release()
+
+        threading.Thread(target=_worker, name="NetOpsRemoteHubWatchdog", daemon=True).start()
+    except Exception as exc:
+        try:
+            print(f"[REMOTE_HUB_WATCHDOG_WARN] {exc}", flush=True)
+        except Exception:
+            pass
 
 
 def dil_secim_penceresi_ac(parent, zorunlu=False, sonra=None):
@@ -7514,6 +8567,7 @@ def now_playing_ui_palette():
             "entry": aktif_palet.get("entry_bg", "#141418"),
             "border": aktif_palet.get("entry_border", "#34343C"),
             "text": aktif_palet.get("text_main", "#F4F4F5"),
+            "text_main": aktif_palet.get("text_main", "#F4F4F5"),
             "dim": aktif_palet.get("text_dim", "#A1A1AA"),
             "accent": aktif_palet.get("neon", "#22C55E"),
             "accent_hover": aktif_palet.get("accent_hover", aktif_palet.get("button_hover", "#2A2A31")),
@@ -7522,10 +8576,11 @@ def now_playing_ui_palette():
         }
     except Exception:
         return {
-            "bg": "#09090B", "card": "#1B1B20", "entry": "#141418",
-            "border": "#34343C", "text": "#F4F4F5", "dim": "#A1A1AA",
-            "accent": "#22C55E", "accent_hover": "#34D399",
-            "accent_text": "#111114", "hover": "#2A2A31",
+            "bg": FLUENT_DARK["bg"], "card": FLUENT_DARK["card"], "entry": FLUENT_DARK["entry_bg"],
+            "border": FLUENT_DARK["entry_border"], "text": FLUENT_DARK["text_main"],
+            "text_main": FLUENT_DARK["text_main"], "dim": FLUENT_DARK["text_dim"],
+            "accent": FLUENT_DARK["accent"], "accent_hover": FLUENT_DARK["accent_hover"],
+            "accent_text": FLUENT_DARK["accent_text"], "hover": FLUENT_DARK["button_hover"],
         }
 
 
@@ -8026,6 +9081,169 @@ def neto_sahneler_merkezi_ac():
 if __name__ == '__main__':
     multiprocessing.freeze_support()
 
+    # The current product entry point is the native Qt shell. The previous
+    # CustomTkinter desktop remains available only through an explicit legacy
+    # flag so an old shortcut cannot silently select it.
+    if (
+        os.environ.get("NETOPS_QT_UI", "1") == "1"
+        and os.environ.get("NETOPS_LEGACY_UI", "0") != "1"
+    ):
+        from netops_qt_backend import build_qt_backend as _build_qt_backend
+        from netops_qt_shell import run_native_qt_app as _run_native_qt_app
+        from neto_text_assistant import NetOpsTextAssistant
+
+        def _qt_devices():
+            module = _netops_device_hub_module()
+            return module.device_hub_snapshot() if module is not None else {}
+
+        def _qt_media():
+            try:
+                module = _neto_lazy_import("neto_now_playing")
+                result = module.get_current_media(force_fresh=True) or {}
+                if result.get("title") and not result.get("cover_path"):
+                    retry_key = "|".join(
+                        str(result.get(field, "") or "").strip().casefold()
+                        for field in ("title", "artist")
+                    )
+                    if retry_key and retry_key != getattr(_qt_media, "_cover_retry_key", ""):
+                        _qt_media._cover_retry_key = retry_key
+                        retry_reader = getattr(module, "_get_media_session", None)
+                        same_song = getattr(module, "_same_song", None)
+                        if callable(retry_reader) and callable(same_song):
+                            retry_media = retry_reader(timeout=1.5)
+                            if (
+                                retry_media
+                                and retry_media.get("cover_path")
+                                and same_song(result, retry_media)
+                            ):
+                                result = dict(result)
+                                result["cover_path"] = retry_media["cover_path"]
+                if (
+                    os.environ.get("NETOPS_DEBUG_NOW_PLAYING") == "1"
+                    and not getattr(_qt_media, "_debug_reported", False)
+                ):
+                    _qt_media._debug_reported = True
+                    print(
+                        f"[QT_MEDIA] module={getattr(module, '__file__', '')!r} "
+                        f"thumbnail_helper={hasattr(module, '_thumbnail_extension')} "
+                        f"result title={result.get('title', '')!r} cover={result.get('cover_path', '')!r}",
+                        flush=True,
+                    )
+                return result
+            except Exception as exc:
+                if os.environ.get("NETOPS_DEBUG_NOW_PLAYING") == "1":
+                    print(
+                        f"[QT_MEDIA] neto_now_playing failed: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                raise
+
+        def _qt_automations():
+            module = _neto_lazy_import("neto_automation_core")
+            return module.list_automations()
+
+        def _qt_media_control(action):
+            module = _neto_lazy_import("neto_now_playing")
+            action = str(action or "").strip()
+            if action == "volume_get":
+                value = volume_get_percent()
+                muted = volume_get_mute()
+                return {"ok": value is not None, "value": value, "muted": muted}
+            if action.startswith("volume_set:"):
+                try:
+                    value = max(0, min(100, int(action.split(":", 1)[1])))
+                except Exception:
+                    return {"ok": False, "error": "Ses değeri geçersiz."}
+                return {"ok": bool(volume_set_percent(value, announce=False)), "value": value}
+            if action == "mute_toggle":
+                muted = volume_get_mute()
+                if muted is None:
+                    return {"ok": False, "error": "Sessize alma durumu okunamadı."}
+                return {"ok": bool(volume_set_mute(not muted, announce=False)), "muted": not muted}
+            if action.startswith("seek:"):
+                try:
+                    position_seconds = max(0.0, float(action.split(":", 1)[1]))
+                except Exception:
+                    return {"ok": False, "error": "Sarma konumu geçersiz."}
+                handler = getattr(module, "media_session_control", None)
+                if not callable(handler):
+                    return {"ok": False, "error": "Medya sarma desteği yok."}
+                return {
+                    "ok": bool(handler("seek", position_seconds=position_seconds)),
+                    "position_seconds": position_seconds,
+                }
+            handlers = {
+                "previous": module.media_previous,
+                "play_pause": module.media_play_pause,
+                "next": module.media_next,
+            }
+            handler = handlers.get(str(action))
+            return {"ok": bool(handler())} if callable(handler) else {"ok": False, "error": "Bilinmeyen medya komutu."}
+
+        def _qt_remote(text):
+            result = neto_remote_assistant_request(str(text or ""), "NetOps Desktop")
+            _neto_command_arena_record(str(text or ""), "NetOps Desktop", result if isinstance(result, dict) else {})
+            return result
+
+        def _qt_speech(text):
+            try:
+                sesli_oku(str(text or ""))
+                return {"ok": True}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        _qt_text_assistant = NetOpsTextAssistant(
+            command_router=lokal_sistem_islemcisi,
+            fallback_responder=neto_ai_cevap_ver,
+            logger=lambda message: print(message, flush=True),
+        )
+
+        def _qt_notifications():
+            try:
+                arena = _neto_lazy_import("neto_command_arena")
+                return arena.ARENA.snapshot()
+            except Exception:
+                return []
+
+        def _qt_save_settings(data):
+            try:
+                veri_kaydet(dict(data))
+                return {"ok": True}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def _qt_system():
+            metrics = dict(neto_system_metrics(force=True))
+            devices = _qt_devices()
+            metrics["devices"] = devices.get("online_count", devices.get("device_count", 0))
+            metrics["remote"] = "Çalışıyor" if devices.get("running") else "Hazır"
+            return metrics
+
+        raise SystemExit(
+            _run_native_qt_app(
+                _build_qt_backend(
+                    system_reader=_qt_system,
+                    device_reader=_qt_devices,
+                    media_reader=_qt_media,
+                    automation_reader=_qt_automations,
+                    chat_reader=_qt_text_assistant.respond,
+                    command_runner=lokal_sistem_islemcisi,
+                    media_control_runner=_qt_media_control,
+                    settings_reader=veri_yukle,
+                    settings_writer=_qt_save_settings,
+                    remote_reader=_qt_remote,
+                    speech_runner=_qt_speech,
+                    notifications_reader=_qt_notifications,
+                )
+            )
+        )
+
+    # Focused Remote surface: it is intentionally a separate process so the
+    # main chat window can close without taking the Termux bridge UI with it.
+    if "--netops-remote" in sys.argv:
+        from neto_remote_surface import run as _neto_remote_surface_run
+        raise SystemExit(_neto_remote_surface_run())
+
     # PyInstaller EXE worker mode: run the scheduler without opening the GUI.
     if "--netops-automation-worker" in sys.argv:
         sys.argv = [arg for arg in sys.argv if arg != "--netops-automation-worker"]
@@ -8035,41 +9253,6 @@ if __name__ == '__main__':
     # ------------------------------------------------------------
     # NOW PLAYING v10.9 - Şu An Çalıyor
     # ------------------------------------------------------------
-    def now_playing_get_max_seconds():
-        try:
-            return int(veri_yukle().get("now_playing_max_seconds", 1800))
-        except Exception:
-            return 1800
-
-    def now_playing_set_max_seconds(seconds):
-        try:
-            seconds = max(10, min(7200, int(seconds)))
-            h = veri_yukle()
-            h["now_playing_max_seconds"] = seconds
-            veri_kaydet(h)
-            return seconds
-        except Exception:
-            return None
-
-    def now_playing_ayar_komutu(metin):
-        try:
-            k = str(metin or "").lower()
-            if not any(x in k for x in ["çalıyor", "sarki", "şarkı", "muzik", "müzik"]):
-                return None
-            if not any(x in k for x in ["süre", "sure", "saniye", "dakika", "dk"]):
-                return None
-            sayilar = re.findall(r"\d+", k)
-            if not sayilar:
-                return "Süre için sayı söylemelisin. Örnek: Şu an çalıyor süresi 30 dakika."
-            n = int(sayilar[0])
-            saniye = n * 60 if ("dakika" in k or "dk" in k) else n
-            sonuc = now_playing_set_max_seconds(saniye)
-            if sonuc:
-                return f"Şu An Çalıyor ekran süresi {sonuc // 60} dakika yapıldı." if sonuc >= 60 else f"Şu An Çalıyor ekran süresi {sonuc} saniye yapıldı."
-            return "Şu An Çalıyor süresi ayarlanamadı."
-        except Exception as e:
-            return f"Şu An Çalıyor ayar hatası: {e}"
-
     def now_playing_sidebar_guncelle(info):
         """Updates the sidebar Now Playing status."""
         try:
@@ -8079,6 +9262,8 @@ if __name__ == '__main__':
             home_lbl = globals().get("home_now_playing_title")
             home_detay = globals().get("home_now_playing_detail")
             home_status = globals().get("home_now_playing_status")
+            unified_title = globals().get("unified_now_playing_title")
+            unified_detail = globals().get("unified_now_playing_detail")
             sidebar_compact = bool(sidebar_state.get("compact", False))
 
             def _safe_set(widget, text):
@@ -8088,7 +9273,7 @@ if __name__ == '__main__':
                 except Exception:
                     pass
 
-            if not lbl:
+            if not any((lbl, detay_lbl, home_lbl, home_detay, unified_title, unified_detail)):
                 return
 
             if not info or info.get("error") or not info.get("title"):
@@ -8098,6 +9283,8 @@ if __name__ == '__main__':
                 _safe_set(home_lbl, now_playing_text("home_idle_title"))
                 _safe_set(home_detay, "")
                 _safe_set(home_status, now_playing_text("home_idle_status"))
+                _safe_set(unified_title, "Müzik bekleniyor")
+                _safe_set(unified_detail, "Şimdi Çalıyor'u açınca parça bilgisi burada görünür.")
                 island_update = globals().get("now_playing_dynamic_island_update")
                 island_alive = globals().get("now_playing_dynamic_island_alive")
                 if callable(island_update) and callable(island_alive) and island_alive():
@@ -8132,6 +9319,8 @@ if __name__ == '__main__':
             _safe_set(detay_lbl, "" if sidebar_compact else detay)
             _safe_set(home_lbl, title)
             _safe_set(home_detay, detay)
+            _safe_set(unified_title, title)
+            _safe_set(unified_detail, detay)
 
             home_status_text = f"{now_playing_text('source')}: {app}"
             if source == "media_session":
@@ -8151,6 +9340,12 @@ if __name__ == '__main__':
                 pass
 
     def now_playing_open_settings_safe():
+        if not _netoplay_ui_enabled():
+            try:
+                animasyonlu_yazi("NetoPlay eklentisi etkin değil.")
+            except Exception:
+                pass
+            return
         try:
             now_playing_ayar_penceresi_ac()
         except Exception as e:
@@ -8371,31 +9566,16 @@ if __name__ == '__main__':
             pass
 
     def now_playing_manual_open(force=True):
-        """Click handler: always responds. If no track is detected, opens a diagnostic Now Playing screen."""
+        """Open immediately, then detect media off the Tk main thread."""
         try:
-            info = None
-            last_error = None
-
-            # v10.32 fixed: hızlı ilk yakalama.
-            # Açılır açılmaz şarkıyı görmek için daha fazla ama kısa aralıklı deneme yap.
-            for _ in range(12):
-                info = neto_now_playing.get_current_media(force_fresh=True)
-                if info and info.get("error"):
-                    last_error = info.get("error")
-                    now_playing_log(f"[MANUAL_ERROR] {last_error}")
-                if info and not info.get("error") and info.get("title"):
-                    break
-                time.sleep(0.12)
-
-            if info and not info.get("error") and info.get("title"):
-                now_playing_log(f"[MANUAL_FOUND] {info}")
-                now_playing_save_last_media(info)
-                now_playing_sidebar_guncelle(info)
-                now_playing_overlay_goster(info, force=True)
-                return
-
-            # Kullanıcı basınca hiçbir şey olmamış gibi görünmesin:
-            # teşhis ekranı aç.
+            # The monitor is opt-in: opening this surface is the user's explicit
+            # request to activate media detection for the current session.
+            monitor_start = globals().get("now_playing_monitor_baslat")
+            if callable(monitor_start):
+                monitor_start()
+        except Exception:
+            pass
+        try:
             fallback_info = {
                 "title": now_playing_text("detecting"),
                 "artist": now_playing_text("not_found"),
@@ -8405,12 +9585,42 @@ if __name__ == '__main__':
                 "source": "diagnostic",
                 "backend": "manual_click",
             }
-            if last_error:
-                fallback_info["album"] = f"Error: {last_error}"
-
             now_playing_sidebar_guncelle(None)
             now_playing_overlay_goster(fallback_info, force=True)
-            now_playing_log(f"[MANUAL_NOT_FOUND] last_error={last_error}")
+
+            def _probe_media():
+                info = None
+                last_error = None
+                try:
+                    for _ in range(12):
+                        info = neto_now_playing.get_current_media(force_fresh=True)
+                        if info and info.get("error"):
+                            last_error = info.get("error")
+                        if info and not info.get("error") and info.get("title"):
+                            break
+                        time.sleep(0.12)
+                except Exception as exc:
+                    last_error = str(exc)
+
+                def _apply_probe_result():
+                    try:
+                        if info and not info.get("error") and info.get("title"):
+                            now_playing_save_last_media(info)
+                            now_playing_sidebar_guncelle(info)
+                            if now_playing_overlay_alive():
+                                now_playing_overlay_update(info)
+                            now_playing_log(f"[MANUAL_FOUND] {info}")
+                        elif last_error:
+                            now_playing_log(f"[MANUAL_NOT_FOUND] last_error={last_error}")
+                    except Exception as exc:
+                        now_playing_log(f"[MANUAL_APPLY_ERROR] {exc}")
+
+                try:
+                    root.after(0, _apply_probe_result)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_probe_media, name="netops-now-playing-probe", daemon=True).start()
 
         except Exception as e:
             now_playing_log(f"[MANUAL_EXCEPTION] {e}")
@@ -8661,6 +9871,11 @@ if __name__ == '__main__':
             now_playing_idle_bg_frame_index = (now_playing_idle_bg_frame_index + 1) % len(frames)
             canvas.itemconfig(image_item, image=frames[now_playing_idle_bg_frame_index])
             canvas.image = frames[now_playing_idle_bg_frame_index]
+            atmosphere_item = globals().get("now_playing_idle_atmosphere_item")
+            if atmosphere_item:
+                info = globals().get("now_playing_current_info") or globals().get("now_playing_monitor_last_info") or {}
+                atmosphere = _neto_atmosphere_for(info, now_playing_idle_bg_frame_index)
+                canvas.itemconfig(atmosphere_item, fill=atmosphere.get("color", atmosphere["primary"]))
             now_playing_idle_bg_job = root.after(70, now_playing_idle_bg_tick)
         except Exception as exc:
             try:
@@ -8670,7 +9885,7 @@ if __name__ == '__main__':
             now_playing_idle_bg_job = None
 
     def now_playing_idle_start_bg(frame, win):
-        global now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_bg_job, now_playing_idle_bg_frame_index
+        global now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_atmosphere_item, now_playing_idle_bg_job, now_playing_idle_bg_frame_index
         try:
             try:
                 win.update_idletasks()
@@ -8687,9 +9902,14 @@ if __name__ == '__main__':
             canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
             image_item = canvas.create_image(0, 0, image=frames[0], anchor="nw")
             canvas.image = frames[0]
+            atmosphere_item = canvas.create_rectangle(
+                0, 0, target_w, target_h,
+                fill="#2D7FF9", outline="", stipple="gray50",
+            )
             now_playing_idle_bg_canvas = canvas
             now_playing_idle_bg_label = canvas
             now_playing_idle_bg_image_item = image_item
+            now_playing_idle_atmosphere_item = atmosphere_item
             if now_playing_idle_bg_job:
                 try:
                     root.after_cancel(now_playing_idle_bg_job)
@@ -8861,6 +10081,15 @@ if __name__ == '__main__':
         visible_info = now_playing_idle_info_from_visible_labels()
         if now_playing_idle_info_valid(visible_info):
             return visible_info
+        try:
+            cached_info = neto_now_playing.get_current_media(force_fresh=False)
+            if now_playing_idle_info_valid(cached_info):
+                globals()["now_playing_current_info"] = cached_info
+                globals()["now_playing_monitor_last_info"] = cached_info
+                globals()["now_playing_last_info"] = cached_info
+                return cached_info
+        except Exception:
+            pass
         saved_info = now_playing_load_last_media()
         if now_playing_idle_info_valid(saved_info):
             return saved_info
@@ -8939,7 +10168,7 @@ if __name__ == '__main__':
 
             header_label = globals().get("now_playing_idle_header_label")
             if now_playing_widget_alive(header_label):
-                header_label.configure(text="")
+                header_label.configure(text=now_playing_idle_header_compact(info))
 
             song_label = globals().get("now_playing_idle_song_label")
             if now_playing_widget_alive(song_label):
@@ -8948,15 +10177,15 @@ if __name__ == '__main__':
 
             title_label = globals().get("now_playing_idle_title_label")
             if now_playing_widget_alive(title_label):
-                title_label.configure(text="")
+                title_label.configure(text=title)
 
             artist_label = globals().get("now_playing_idle_artist_label")
             if now_playing_widget_alive(artist_label):
-                artist_label.configure(text="")
+                artist_label.configure(text=artist or "Sanatçı bilgisi yok")
 
             status_label = globals().get("now_playing_idle_status_label")
             if now_playing_widget_alive(status_label):
-                status_label.configure(text="")
+                status_label.configure(text=f"Durum: {status_text}")
 
             change_label = globals().get("now_playing_idle_change_label")
             if now_playing_widget_alive(change_label) and time.time() < float(now_playing_idle_change_until or 0):
@@ -9001,7 +10230,7 @@ if __name__ == '__main__':
             now_playing_idle_refreshing = False
 
     def now_playing_idle_exit(_event=None):
-        global now_playing_idle_active, now_playing_idle_frame, now_playing_idle_last_activity, now_playing_idle_deadline, now_playing_idle_bg_job, now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_canvas_items
+        global now_playing_idle_active, now_playing_idle_frame, now_playing_idle_last_activity, now_playing_idle_deadline, now_playing_idle_bg_job, now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_atmosphere_item, now_playing_idle_canvas_items
         now_playing_idle_last_activity = time.time()
         now_playing_idle_deadline = now_playing_idle_last_activity + max(1, now_playing_idle_seconds())
         if not now_playing_idle_active:
@@ -9016,6 +10245,7 @@ if __name__ == '__main__':
         now_playing_idle_bg_label = None
         now_playing_idle_bg_canvas = None
         now_playing_idle_bg_image_item = None
+        now_playing_idle_atmosphere_item = None
         now_playing_idle_canvas_items = {}
         try:
             if now_playing_idle_frame is not None and now_playing_idle_frame.winfo_exists():
@@ -9169,7 +10399,16 @@ if __name__ == '__main__':
             pass
 
     def now_playing_overlay_kapat():
-        global now_playing_overlay, now_playing_canvas_job, now_playing_hidden_until_key, now_playing_countdown_job, now_playing_idle_job, now_playing_idle_active, now_playing_idle_frame, now_playing_idle_bg_job, now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_canvas_items
+        global now_playing_overlay, now_playing_canvas_job, now_playing_hidden_until_key, now_playing_countdown_job, now_playing_idle_job, now_playing_idle_active, now_playing_idle_frame, now_playing_idle_bg_job, now_playing_idle_bg_label, now_playing_idle_bg_canvas, now_playing_idle_bg_image_item, now_playing_idle_canvas_items, now_playing_youtube_panel, now_playing_youtube_host_frame, now_playing_youtube_live_button
+        try:
+            if now_playing_youtube_panel is not None:
+                from neto_youtube_music_panel import close_panel
+                close_panel()
+            now_playing_youtube_panel = None
+        except Exception:
+            pass
+        now_playing_youtube_host_frame = None
+        now_playing_youtube_live_button = None
         try:
             if now_playing_canvas_job:
                 root.after_cancel(now_playing_canvas_job)
@@ -9222,6 +10461,14 @@ if __name__ == '__main__':
                 return
             try:
                 if now_playing_visual_mode_get() != "wave":
+                    try:
+                        unified_cpu = globals().get("unified_cpu_label")
+                        unified_ram = globals().get("unified_ram_label")
+                        if unified_cpu is not None and unified_ram is not None:
+                            unified_cpu.configure(text=f"% {measuring}")
+                            unified_ram.configure(text=f"% {measuring}")
+                    except Exception:
+                        pass
                     return
             except Exception:
                 pass
@@ -9278,6 +10525,16 @@ if __name__ == '__main__':
         except Exception:
             pass
         return now_playing_text("status_unknown")
+
+    def now_playing_timeline_text(info):
+        try:
+            position = max(0, int(float((info or {}).get("position_seconds") or 0)))
+            duration = max(0, int(float((info or {}).get("duration_seconds") or 0)))
+            if duration <= 0:
+                return ""
+            return f"{position // 60:02d}:{position % 60:02d} / {duration // 60:02d}:{duration % 60:02d}"
+        except Exception:
+            return ""
 
     def now_playing_visual_mode_get():
         try:
@@ -9464,6 +10721,12 @@ if __name__ == '__main__':
             try:
                 if now_playing_widget_alive(now_playing_status_label):
                     now_playing_status_label.configure(text=f"{now_playing_text('status')}: {now_playing_status_text_from_info(info)}")
+            except Exception:
+                pass
+            try:
+                timeline_label = globals().get("now_playing_timeline_label")
+                if now_playing_widget_alive(timeline_label):
+                    timeline_label.configure(text=now_playing_timeline_text(info))
             except Exception:
                 pass
             try:
@@ -10310,7 +11573,21 @@ if __name__ == '__main__':
             def worker(q=query):
                 try:
                     import neto_music_search
-                    result = neto_music_search.search_and_play(q)
+                    live_panel = globals().get("now_playing_youtube_panel")
+                    if live_panel is not None and live_panel.is_alive():
+                        resolved = neto_music_search.search_with_ytmusicapi(q)
+                        if resolved.get("ok"):
+                            url = neto_music_search.youtube_music_watch_url(resolved.get("video_id", ""))
+                            opened = now_playing_youtube_live_open_url(url)
+                            result = dict(resolved)
+                            result["ok"] = bool(opened)
+                            result["slot_message"] = "Canlı YouTube Music paneli güncellendi."
+                            if not opened:
+                                result["error"] = "Canlı YouTube Music paneli hazır değil."
+                        else:
+                            result = resolved
+                    else:
+                        result = neto_music_search.search_and_play(q)
 
                     def update():
                         try:
@@ -10381,9 +11658,196 @@ if __name__ == '__main__':
             except Exception:
                 return False
 
+    def now_playing_sessions_selector_ac():
+        """Open a small selector for the available Windows media sessions."""
+        try:
+            sessions_window = ctk.CTkToplevel(root)
+            sessions_window.title("Medya Oynatıcıları")
+            sessions_window.geometry("520x420")
+            sessions_window.minsize(420, 320)
+            pal = now_playing_ui_palette()
+            sessions_window.configure(fg_color=pal["bg"])
+            try:
+                sessions_window.transient(now_playing_overlay or root)
+                sessions_window.attributes("-topmost", True)
+                sessions_window.after(500, lambda: sessions_window.attributes("-topmost", False))
+            except Exception:
+                pass
+
+            ctk.CTkLabel(
+                sessions_window,
+                text="Medya Oynatıcıları",
+                text_color=pal["text"],
+                font=("Segoe UI Semibold", 20),
+                anchor="w",
+            ).pack(fill="x", padx=18, pady=(16, 2))
+            ctk.CTkLabel(
+                sessions_window,
+                text="NetOps'un kontrol edeceği oturumu seç.",
+                text_color=pal["dim"],
+                font=("Segoe UI", 11),
+                anchor="w",
+            ).pack(fill="x", padx=18, pady=(0, 12))
+
+            list_frame = ctk.CTkScrollableFrame(sessions_window, fg_color=pal["card"], corner_radius=14)
+            list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+            status = ctk.CTkLabel(sessions_window, text="Oturumlar okunuyor...", text_color=pal["dim"], font=("Segoe UI", 10))
+            status.pack(fill="x", padx=18, pady=(0, 12))
+
+            def render(items):
+                try:
+                    for child in list_frame.winfo_children():
+                        child.destroy()
+                    if not items:
+                        status.configure(text="Aktif medya oturumu bulunamadı.")
+                        return
+                    status.configure(text=f"{len(items)} medya oturumu bulundu.")
+                    for item in items:
+                        title = str(item.get("title") or "Bilinmeyen parça")
+                        artist = str(item.get("artist") or "Sanatçı bilgisi yok")
+                        app = str(item.get("app") or "Medya oynatıcı")
+                        active = bool(item.get("selected"))
+                        position = float(item.get("position_seconds") or 0)
+                        duration = float(item.get("duration_seconds") or 0)
+                        timeline = f"  {int(position // 60):02d}:{int(position % 60):02d} / {int(duration // 60):02d}:{int(duration % 60):02d}" if duration else ""
+                        button = ctk.CTkButton(
+                            list_frame,
+                            text=f"{'● ' if active else ''}{app}  ·  {title} — {artist}{timeline}",
+                            height=44,
+                            anchor="w",
+                            corner_radius=10,
+                            fg_color=pal["accent"] if active else pal["entry"],
+                            hover_color=pal["accent_hover"],
+                            text_color=pal["accent_text"] if active else pal["text"],
+                            command=lambda key=item.get("session_key"): choose(key),
+                        )
+                        button.pack(fill="x", padx=8, pady=5)
+                except Exception:
+                    pass
+
+            def choose(key):
+                try:
+                    neto_now_playing.select_media_session(key)
+                    sessions_window.destroy()
+                    now_playing_manual_open(force=True)
+                except Exception as exc:
+                    try:
+                        status.configure(text=f"Oynatıcı seçilemedi: {exc}")
+                    except Exception:
+                        pass
+
+            def load():
+                try:
+                    items = neto_now_playing.list_media_sessions(timeout=1.6)
+                    root.after(0, lambda: render(items))
+                except Exception as exc:
+                    root.after(0, lambda: status.configure(text=f"Oturumlar okunamadı: {exc}"))
+
+            threading.Thread(target=load, daemon=True, name="NetOpsMediaSessionPicker").start()
+            sessions_window.bind("<Escape>", lambda _event: sessions_window.destroy())
+            sessions_window.focus_force()
+            return sessions_window
+        except Exception as exc:
+            now_playing_log(f"[MEDIA_SESSION_SELECTOR_ERROR] {exc}")
+            return None
+
+    def now_playing_youtube_live_close():
+        """Close only the optional live web surface and restore the visualizer."""
+        global now_playing_youtube_panel
+        try:
+            if now_playing_youtube_panel is not None:
+                now_playing_youtube_panel.close()
+        except Exception:
+            pass
+        now_playing_youtube_panel = None
+        host = globals().get("now_playing_youtube_host_frame")
+        visual = globals().get("now_playing_visual_frame")
+        try:
+            if host is not None and host.winfo_exists():
+                host.pack_forget()
+        except Exception:
+            pass
+        try:
+            if visual is not None and visual.winfo_exists() and not visual.winfo_manager():
+                visual.pack(fill="x", padx=0, pady=(8, 10))
+        except Exception:
+            pass
+        button = globals().get("now_playing_youtube_live_button")
+        try:
+            if button is not None and button.winfo_exists():
+                button.configure(text="◉ YouTube Music Live")
+        except Exception:
+            pass
+
+    def now_playing_youtube_live_toggle():
+        """Toggle an isolated, interactive YouTube Music page inside Now Playing."""
+        global now_playing_youtube_panel
+        try:
+            if now_playing_youtube_panel is not None and now_playing_youtube_panel.is_alive():
+                now_playing_youtube_live_close()
+                return
+
+            host = globals().get("now_playing_youtube_host_frame")
+            visual = globals().get("now_playing_visual_frame")
+            if host is None or not host.winfo_exists():
+                return
+            if visual is not None and visual.winfo_exists():
+                visual.pack_forget()
+            host.pack(fill="x", padx=0, pady=(8, 10))
+            host.update_idletasks()
+
+            from neto_youtube_music_panel import get_panel, webengine_available
+            if not webengine_available():
+                now_playing_youtube_live_close()
+                status = globals().get("now_playing_search_status")
+                if now_playing_widget_alive(status):
+                    status.configure(text="Canlı panel için Windows YouTube Music penceresi gerekli.", text_color="#ffb3b3")
+                return
+
+            panel = get_panel()
+            width = max(480, int(host.winfo_width() or 900))
+            height = max(240, int(host.winfo_height() or 330))
+            if not panel.open(host.winfo_id(), width, height):
+                now_playing_youtube_live_close()
+                status = globals().get("now_playing_search_status")
+                if now_playing_widget_alive(status):
+                    status.configure(
+                        text="YouTube Music Chrome'da açılıyor; sayfa gelince Live düğmesine tekrar bas.",
+                        text_color=now_playing_ui_palette()["accent"],
+                    )
+                return
+            now_playing_youtube_panel = panel
+            button = globals().get("now_playing_youtube_live_button")
+            if button is not None and button.winfo_exists():
+                button.configure(text="■ YouTube Music'i Kapat")
+
+            def sync_size():
+                try:
+                    if panel.is_alive() and host.winfo_exists():
+                        panel.resize(max(480, host.winfo_width()), max(240, host.winfo_height()))
+                        root.after(500, sync_size)
+                except Exception:
+                    pass
+            root.after(500, sync_size)
+        except Exception as exc:
+            now_playing_log(f"[YOUTUBE_MUSIC_PANEL_ERROR] {exc}")
+            now_playing_youtube_live_close()
+
+    def now_playing_youtube_live_open_url(url: str) -> bool:
+        """Open a YouTube Music URL in the active embedded panel."""
+        try:
+            panel = globals().get("now_playing_youtube_panel")
+            if panel is None or not panel.is_alive():
+                return False
+            return bool(panel.open_url(url))
+        except Exception:
+            return False
+
     def now_playing_overlay_goster(info, force=False):
         """Open fullscreen once. On track change only update labels; never recreate."""
         global now_playing_overlay, now_playing_current_key, now_playing_hidden_until_key, now_playing_countdown_label, now_playing_end_time
+        if not _netoplay_ui_enabled():
+            return
         try:
             if not info or info.get("error") or not info.get("title"):
                 return
@@ -10446,7 +11910,7 @@ if __name__ == '__main__':
             _np_screen_title.pack(side="left")
 
             _np_close = now_playing_widget_kaydet("close", ctk.CTkButton(
-                top, text="✕", width=48, height=40, corner_radius=14,
+                top, text="✕", width=48, height=40, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["card"], hover_color=_np_pal["hover"],
                 text_color=_np_pal["text"], command=now_playing_overlay_kapat
             ), "secondary")
@@ -10493,19 +11957,41 @@ if __name__ == '__main__':
             globals()["now_playing_status_label"].pack(pady=(0, 6))
             now_playing_widget_kaydet("status", globals()["now_playing_status_label"], "accent_text")
 
+            globals()["now_playing_timeline_label"] = ctk.CTkLabel(
+                center,
+                text=now_playing_timeline_text(info),
+                text_color=_np_pal["dim"],
+                font=("Segoe UI Semibold", 13),
+            )
+            globals()["now_playing_timeline_label"].pack(pady=(0, 8))
+            now_playing_widget_kaydet("timeline", globals()["now_playing_timeline_label"], "dim")
+
             globals()["now_playing_visual_frame"] = ctk.CTkFrame(
-                center, fg_color=_np_pal["card"], corner_radius=18,
-                border_width=2, border_color=_np_pal["accent"],
+                center, fg_color=_np_pal["card"], corner_radius=FLUENT_RADII["card"],
+                border_width=1, border_color=_np_pal["accent"],
             )
             globals()["now_playing_visual_frame"].pack(fill="x", padx=0, pady=(8, 10))
             now_playing_widget_kaydet("visual_frame", globals()["now_playing_visual_frame"], "accent_frame")
             now_playing_render_visual()
 
+            # YouTube Music is an opt-in live surface. It replaces the visualizer
+            # card while open, so the rest of Now Playing keeps its stable layout.
+            globals()["now_playing_youtube_host_frame"] = ctk.CTkFrame(
+                center,
+                height=330,
+                fg_color=_np_pal["card"],
+                corner_radius=FLUENT_RADII["card"],
+                border_width=1,
+                border_color=_np_pal["accent"],
+            )
+            globals()["now_playing_youtube_host_frame"].pack_propagate(False)
+            globals()["now_playing_youtube_host_frame"].pack_forget()
+
             controls = ctk.CTkFrame(center, fg_color="transparent")
             controls.pack(pady=(4, 14))
 
             _np_prev = now_playing_widget_kaydet("prev", ctk.CTkButton(
-                controls, text="⏮", width=58, height=42, corner_radius=14,
+                controls, text="⏮", width=58, height=42, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["card"], hover_color=_np_pal["hover"],
                 text_color=_np_pal["text"], command=now_playing_prev_track
             ), "secondary")
@@ -10513,14 +11999,14 @@ if __name__ == '__main__':
 
             _np_play = now_playing_widget_kaydet("play", ctk.CTkButton(
                 controls, text=f"▶ / ⏸ {now_playing_text('play_pause')}",
-                width=190, height=42, corner_radius=14,
+                width=190, height=42, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["accent"], hover_color=_np_pal["accent_hover"],
                 text_color=_np_pal["accent_text"], command=now_playing_play_pause
             ), "primary")
             _np_play.pack(side="left", padx=6)
 
             _np_next = now_playing_widget_kaydet("next", ctk.CTkButton(
-                controls, text="⏭", width=58, height=42, corner_radius=14,
+                controls, text="⏭", width=58, height=42, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["card"], hover_color=_np_pal["hover"],
                 text_color=_np_pal["text"], command=now_playing_next_track
             ), "secondary")
@@ -10528,16 +12014,42 @@ if __name__ == '__main__':
 
             _np_refresh = now_playing_widget_kaydet("refresh", ctk.CTkButton(
                 controls, text=f"🔄 {now_playing_text('refresh')}",
-                width=110, height=42, corner_radius=14,
+                width=110, height=42, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["card"], hover_color=_np_pal["hover"],
                 text_color=_np_pal["text"], command=lambda: now_playing_manual_open(force=True)
             ), "secondary")
             _np_refresh.pack(side="left", padx=6)
 
+            _np_sessions = now_playing_widget_kaydet("sessions", ctk.CTkButton(
+                controls,
+                text="Oynatıcılar",
+                width=112,
+                height=42,
+                corner_radius=FLUENT_RADII["control"],
+                fg_color=_np_pal["card"],
+                hover_color=_np_pal["hover"],
+                text_color=_np_pal["text"],
+                command=now_playing_sessions_selector_ac,
+            ), "secondary")
+            _np_sessions.pack(side="left", padx=6)
+
+            globals()["now_playing_youtube_live_button"] = now_playing_widget_kaydet("youtube_live", ctk.CTkButton(
+                controls,
+                text="◉ YouTube Music Live",
+                width=168,
+                height=42,
+                corner_radius=FLUENT_RADII["control"],
+                fg_color=_np_pal["card"],
+                hover_color=_np_pal["hover"],
+                text_color=_np_pal["text"],
+                command=now_playing_youtube_live_toggle,
+            ), "secondary")
+            globals()["now_playing_youtube_live_button"].pack(side="left", padx=6)
+
             globals()["now_playing_visual_mode_button"] = now_playing_widget_kaydet("visual_mode", ctk.CTkButton(
                 controls,
                 text=now_playing_text("switch_to_wave") if now_playing_visual_mode_get() == "vinyl" else now_playing_text("switch_to_vinyl"),
-                width=150, height=42, corner_radius=14,
+                width=150, height=42, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["card"], hover_color=_np_pal["hover"],
                 text_color=_np_pal["text"], command=now_playing_visual_mode_toggle
             ), "secondary")
@@ -10548,7 +12060,7 @@ if __name__ == '__main__':
                 text=now_playing_text("dynamic_island"),
                 width=138,
                 height=42,
-                corner_radius=14,
+                corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["accent"],
                 hover_color=_np_pal["accent_hover"],
                 text_color=_np_pal["accent_text"],
@@ -10571,7 +12083,7 @@ if __name__ == '__main__':
                 search_box,
                 width=460,
                 height=40,
-                corner_radius=14,
+                corner_radius=FLUENT_RADII["control"],
                 placeholder_text=now_playing_text("search_placeholder"),
                 fg_color=_np_pal["entry"],
                 border_color=_np_pal["border"],
@@ -10592,7 +12104,7 @@ if __name__ == '__main__':
 
             _np_search_button = now_playing_widget_kaydet("search_button", ctk.CTkButton(
                 search_box, text=f"▶ {now_playing_text('search_play')}",
-                width=115, height=40, corner_radius=14,
+                width=115, height=40, corner_radius=FLUENT_RADII["control"],
                 fg_color=_np_pal["accent"], hover_color=_np_pal["accent_hover"],
                 text_color=_np_pal["accent_text"],
                 command=lambda e=globals()["now_playing_search_entry"], s=globals()["now_playing_search_status"]: now_playing_search_play_song(e, s)
@@ -10989,10 +12501,10 @@ if __name__ == '__main__':
 
     # ------------------------------------------------------------
     # NOW PLAYING SAFE START v10.23
-    # Auto monitor is disabled at startup to prevent silent launch crashes.
+    # The monitor is activated by now_playing_manual_open(), not at startup.
     # ------------------------------------------------------------
     def now_playing_safe_start():
-        """Arka plan algılayıcısını yalnızca bir kez başlatır; kullanıcı tıklaması gerekmez."""
+        """Start the media monitor only after the user opens Now Playing."""
         try:
             fn = globals().get("now_playing_monitor_baslat")
             if callable(fn):
@@ -11011,11 +12523,99 @@ if __name__ == '__main__':
                 pass
         return False
 
+    def now_playing_sidebar_initial_probe():
+        """Keep the sidebar card fresh without enabling the heavy media monitor.
+
+        The full monitor remains opt-in for the Now Playing screen. The home
+        card uses a small worker probe instead, so changing a track in YouTube
+        Music or Spotify is reflected without blocking Tk or retaining an old
+        cache entry forever.
+        """
+        global now_playing_sidebar_probe_job
+        global now_playing_sidebar_probe_busy
+        global now_playing_sidebar_probe_misses
+        if now_playing_sidebar_probe_busy:
+            return
+        now_playing_sidebar_probe_busy = True
+
+        def _schedule_next_probe():
+            global now_playing_sidebar_probe_job
+            try:
+                if root.winfo_exists():
+                    now_playing_sidebar_probe_job = root.after(2500, now_playing_sidebar_initial_probe)
+            except Exception:
+                now_playing_sidebar_probe_job = None
+
+        try:
+            # Do not paint the previous session's song into the live card.
+            # Wait for the current Windows media session to be confirmed.
+            now_playing_sidebar_guncelle(None)
+        except Exception:
+            pass
+
+        def _probe():
+            info = None
+            try:
+                candidate = neto_now_playing.get_current_media(force_fresh=True)
+                if now_playing_media_info_valid_basic(candidate):
+                    info = dict(candidate)
+                    now_playing_save_last_media(info)
+            except Exception:
+                pass
+
+            def _apply():
+                global now_playing_sidebar_probe_busy
+                global now_playing_sidebar_probe_misses
+                if not info:
+                    now_playing_sidebar_probe_misses += 1
+                    if now_playing_sidebar_probe_misses >= 2:
+                        try:
+                            now_playing_sidebar_guncelle(None)
+                        except Exception:
+                            pass
+                    now_playing_sidebar_probe_busy = False
+                    _schedule_next_probe()
+                    return
+                try:
+                    now_playing_sidebar_probe_misses = 0
+                    globals()["now_playing_current_info"] = info
+                    globals()["now_playing_monitor_last_info"] = info
+                    globals()["now_playing_last_info"] = info
+                    now_playing_sidebar_guncelle(info)
+                except Exception:
+                    pass
+                finally:
+                    now_playing_sidebar_probe_busy = False
+                    _schedule_next_probe()
+
+            try:
+                root.after(0, _apply)
+            except Exception:
+                now_playing_sidebar_probe_busy = False
+                _schedule_next_probe()
+                pass
+
+        try:
+            threading.Thread(target=_probe, name="NetoNowPlayingSidebarProbe", daemon=True).start()
+        except Exception:
+            now_playing_sidebar_probe_busy = False
+            _schedule_next_probe()
+
 
     root = ctk.CTk()
     crash_guard.boot("root oluşturuldu")
     crash_guard.install_tk(root)
     root.title(T("app_title"))
+    # Başlıksız Tk penceresi görev çubuğunda pythonw simgesine düşmesin.
+    # AppUserModelID ve Win32 ikonları birlikte ayarlanır.
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "NetOps.NetOpsDesktop"
+            )
+        except Exception:
+            pass
     # Özel üst çubuk, eski Windows başlık çubuğunun yerine uygulamanın içinde yer alır.
     # İçerik yüksekliği küçülmesin diye pencere yüksekliği 44 px artırıldı.
     root.geometry("950x694")
@@ -11102,6 +12702,7 @@ if __name__ == '__main__':
             WM_SETICON = 0x0080
             ICON_SMALL = 0
             ICON_BIG = 1
+            ICON_SMALL2 = 2
             flags = LR_LOADFROMFILE | LR_DEFAULTSIZE
 
             handles = _neto_windows_icon_handles
@@ -11113,8 +12714,25 @@ if __name__ == '__main__':
 
             if handles.get("small"):
                 send_message(hwnd, WM_SETICON, ICON_SMALL, handles["small"])
+                send_message(hwnd, WM_SETICON, ICON_SMALL2, handles["small"])
             if handles.get("big"):
                 send_message(hwnd, WM_SETICON, ICON_BIG, handles["big"])
+
+            # Custom titlebar kullanılan Tk pencerelerinde WM_SETICON bazen
+            # görev çubuğuna yansımıyor; sınıf ikonunu da açıkça güncelle.
+            set_class_long_ptr = getattr(user32, "SetClassLongPtrW", None)
+            if set_class_long_ptr is not None:
+                # Python's wintypes does not expose LONG_PTR on every Windows
+                # build.  ctypes.c_ssize_t has the same pointer-sized width.
+                long_ptr = getattr(wintypes, "LONG_PTR", ctypes.c_ssize_t)
+                set_class_long_ptr.argtypes = (wintypes.HWND, ctypes.c_int, long_ptr)
+                set_class_long_ptr.restype = long_ptr
+                GCLP_HICON = -14
+                GCLP_HICONSM = -34
+                if handles.get("big"):
+                    set_class_long_ptr(hwnd, GCLP_HICON, handles["big"])
+                if handles.get("small"):
+                    set_class_long_ptr(hwnd, GCLP_HICONSM, handles["small"])
         except Exception as exc:
             try:
                 crash_guard.log(f"[WINDOW_ICON_ERROR] {exc}")
@@ -11422,39 +13040,174 @@ if __name__ == '__main__':
     titlebar.pack(side="top", fill="x")
     titlebar.pack_propagate(False)
 
+    # Marka satiri artik boydan boya operasyon arac cubugudur. Logo, urun adi
+    # ve surum burada tekrar edilmez; kimlik sol navigasyonda zaten gorunur.
     titlebar_brand = ctk.CTkFrame(titlebar, fg_color="transparent", corner_radius=0)
-    titlebar_brand.pack(side="left", fill="y", padx=(10, 0))
+    titlebar_logo = ctk.CTkLabel(titlebar_brand, text="", width=1, height=1)
+    titlebar_title = ctk.CTkLabel(titlebar_brand, text="")
+    titlebar_version = ctk.CTkLabel(titlebar_brand, text="")
 
-    _neto_titlebar_logo_image = None
-    try:
-        _tb_logo_path = get_asset_path("neto_titlebar_logo.png")
-        if os.path.exists(_tb_logo_path):
-            _neto_titlebar_logo_image = ctk.CTkImage(
-                light_image=Image.open(_tb_logo_path).convert("RGBA"),
-                dark_image=Image.open(_tb_logo_path).convert("RGBA"),
-                size=(36, 36),
-            )
-    except Exception:
-        _neto_titlebar_logo_image = None
+    titlebar_tools = ctk.CTkFrame(titlebar, fg_color="transparent", corner_radius=0)
+    titlebar_tools.pack(side="left", fill="both", expand=True, padx=(10, 6))
 
-    titlebar_logo = ctk.CTkLabel(
-        titlebar_brand, text="" if _neto_titlebar_logo_image else "▲",
-        image=_neto_titlebar_logo_image, width=38, height=38,
-        text_color=aktif_palet["neon"], font=("Segoe UI Semibold", 22),
+    titlebar_tool_cards = []
+    titlebar_tool_values = {}
+    titlebar_tool_titles = {}
+    titlebar_notifications = [
+        {"title": "NetOps hazır", "detail": "Araç çubuğu ve yerel servisler çalışıyor."},
+    ]
+
+    def _titlebar_tool_bind(widget, event_name, callback):
+        try:
+            widget.bind(event_name, callback, add="+")
+        except Exception:
+            pass
+
+    def _titlebar_tool_card(key, icon_text, title, value, width=112, command=None):
+        card = ctk.CTkFrame(
+            titlebar_tools,
+            width=width,
+            height=38,
+            fg_color=aktif_palet["card"],
+            corner_radius=FLUENT_RADII["control"],
+            border_width=1,
+            border_color=aktif_palet["entry_border"],
+            cursor="hand2" if command else "arrow",
+        )
+        card.pack(side="left", fill="y", padx=(0, 6), pady=6)
+        card.pack_propagate(False)
+        icon = ctk.CTkLabel(
+            card, text=icon_text, width=22, text_color=aktif_palet["neon"],
+            font=("Segoe UI Semibold", 13),
+        )
+        icon.pack(side="left", padx=(7, 3), pady=3)
+        text_box = ctk.CTkFrame(card, fg_color="transparent")
+        text_box.pack(side="left", fill="both", expand=True, pady=4)
+        title_label = ctk.CTkLabel(
+            text_box, text=title, text_color=aktif_palet["text_dim"],
+            font=("Segoe UI Semibold", 8), anchor="w",
+        )
+        title_label.pack_forget()
+        value_label = ctk.CTkLabel(
+            text_box, text=f"{title} · {value}", text_color=aktif_palet["text_main"],
+            font=("Segoe UI Semibold", 8), anchor="w",
+        )
+        value_label.pack(fill="both", expand=True, padx=(0, 3), pady=1)
+        titlebar_tool_values[key] = value_label
+        titlebar_tool_titles[key] = title
+        card._neto_tool_icon = icon
+        card._neto_tool_title = title_label
+        card._neto_tool_value = value_label
+        card._neto_tool_base = aktif_palet["card"]
+        card._neto_tool_hover = aktif_palet["button_hover"]
+        titlebar_tool_cards.append(card)
+
+        def enter(_event=None):
+            if command:
+                try:
+                    card.configure(fg_color=aktif_palet["button_hover"])
+                except Exception:
+                    pass
+
+        def leave(_event=None):
+            try:
+                card.configure(fg_color=aktif_palet["card"])
+            except Exception:
+                pass
+
+        for widget in (card, icon, text_box, title_label, value_label):
+            _titlebar_tool_bind(widget, "<Enter>", enter)
+            _titlebar_tool_bind(widget, "<Leave>", leave)
+            if command:
+                _titlebar_tool_bind(widget, "<Button-1>", lambda _event: command())
+        return card
+
+    def _titlebar_tool_set_value(key, value):
+        label = titlebar_tool_values.get(key)
+        if label is None:
+            return
+        try:
+            label.configure(text=f"{titlebar_tool_titles.get(key, key)} · {value}")
+        except Exception:
+            pass
+
+    def _titlebar_notification_center():
+        panel = ctk.CTkToplevel(root)
+        panel.title("NetOps Bildirimleri")
+        panel.geometry("380x330")
+        panel.configure(fg_color=aktif_palet["bg"])
+        panel.transient(root)
+        panel.grab_set()
+        ctk.CTkLabel(
+            panel, text="Bildirim servisi", text_color=aktif_palet["text_main"],
+            font=("Segoe UI Semibold", 18), anchor="w",
+        ).pack(fill="x", padx=18, pady=(18, 2))
+        ctk.CTkLabel(
+            panel, text="NetOps ve yerel cihaz olayları", text_color=aktif_palet["text_dim"],
+            font=("Segoe UI", 10), anchor="w",
+        ).pack(fill="x", padx=18, pady=(0, 12))
+        feed = ctk.CTkScrollableFrame(panel, fg_color=aktif_palet["sidebar"], corner_radius=FLUENT_RADII["control"])
+        feed.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        for item in reversed(titlebar_notifications[-20:]):
+            row = ctk.CTkFrame(feed, fg_color=aktif_palet["card"], corner_radius=FLUENT_RADII["control"])
+            row.pack(fill="x", padx=4, pady=4)
+            ctk.CTkLabel(
+                row, text=item["title"], text_color=aktif_palet["text_main"],
+                font=("Segoe UI Semibold", 10), anchor="w",
+            ).pack(fill="x", padx=10, pady=(8, 0))
+            ctk.CTkLabel(
+                row, text=item["detail"], text_color=aktif_palet["text_dim"],
+                font=("Segoe UI", 9), anchor="w", justify="left", wraplength=320,
+            ).pack(fill="x", padx=10, pady=(1, 8))
+        ctk.CTkButton(
+            panel, text="Kapat", width=90, height=30, corner_radius=FLUENT_RADII["control"],
+            fg_color=aktif_palet["card"], hover_color=aktif_palet["button_hover"],
+            text_color=aktif_palet["text_main"], command=panel.destroy,
+        ).pack(side="right", padx=14, pady=(0, 14))
+        titlebar_notifications.clear()
+        titlebar_notifications.append({"title": "Bildirim servisi", "detail": "Yeni bildirim yok."})
+        _titlebar_tool_set_value("notifications", "0 yeni")
+
+    _titlebar_tool_card("system", "●", "SİSTEM", "Hazır", width=92)
+    _titlebar_tool_card(
+        "remote", "◈", "REMOTE", "Termux köprüsü", width=136,
+        command=neto_remote_surface_launch_safe,
     )
-    titlebar_logo.pack(side="left", padx=(0, 7), pady=3)
-
-    titlebar_title = ctk.CTkLabel(
-        titlebar_brand, text=APP_NAME, text_color=aktif_palet["text_main"],
-        font=("Segoe UI Semibold", 13), anchor="w"
+    _titlebar_tool_card(
+        "notifications", "◌", "BİLDİRİMLER", "1 yeni", width=122,
+        command=_titlebar_notification_center,
     )
-    titlebar_title.pack(side="left", pady=(1, 0))
-    titlebar_version = ctk.CTkLabel(
-        titlebar_brand, text=APP_VERSION, text_color=aktif_palet["text_dim"],
-        font=("Segoe UI", 10), anchor="w"
+    _titlebar_tool_card(
+        "now_playing", "♫", "NOW PLAYING", "Bekleniyor", width=142,
+        command=lambda: now_playing_manual_open(force=True),
+    )
+    _titlebar_tool_card(
+        "command", "⌕", "KOMUT", "Hızlı erişim", width=118,
+        command=neto_quick_actions_penceresi_ac,
     )
 
-    titlebar_version.pack(side="left", padx=(7, 0), pady=(3, 0))
+    def _titlebar_tools_refresh():
+        """Refresh lightweight toolbar state without starting device services."""
+        try:
+            if not root.winfo_exists():
+                return
+            device_value = "PC · 1 bağlı"
+            try:
+                hub = _netops_device_hub_module()
+                snapshot = hub.device_hub_snapshot() if hub else {}
+                online = int((snapshot or {}).get("online_count") or 0)
+                device_value = f"PC · {max(1, online + 1)} bağlı"
+            except Exception:
+                pass
+            _titlebar_tool_set_value("devices", device_value)
+            info = globals().get("now_playing_last_info") or {}
+            current_title = str(info.get("title") or "Bekleniyor").strip()
+            _titlebar_tool_set_value("now_playing", current_title[:22])
+            root.after(4000, _titlebar_tools_refresh)
+        except Exception:
+            pass
+
+    root.after(350, _titlebar_tools_refresh)
 
     titlebar_controls = ctk.CTkFrame(titlebar, fg_color="transparent", corner_radius=0)
     titlebar_controls.pack(side="right", fill="y")
@@ -11476,7 +13229,8 @@ if __name__ == '__main__':
     titlebar_max_btn = _make_titlebar_button("□", _neto_titlebar_toggle_maximize)
     titlebar_close_btn = _make_titlebar_button("×", _neto_titlebar_close, width=52, close=True)
     titlebar_quick_btn = _make_titlebar_button("⚡", neto_quick_actions_penceresi_ac, width=42)
-    titlebar_quick_btn.pack(side="left", padx=(1, 1), pady=3)
+    # Hızlı erişim artık Tools Bar içindeki Komut kartından açılır.
+    titlebar_quick_btn.pack_forget()
     titlebar_min_btn.pack(side="left", padx=(2, 1), pady=3)
     titlebar_max_btn.pack(side="left", padx=1, pady=3)
     titlebar_close_btn.pack(side="left", padx=(1, 5), pady=3)
@@ -11490,7 +13244,7 @@ if __name__ == '__main__':
     app_content = ctk.CTkFrame(root, fg_color=aktif_palet["bg"], corner_radius=0)
     app_content.pack(side="top", fill="both", expand=True)
 
-    for _drag_widget in (titlebar, titlebar_brand, titlebar_logo, titlebar_title, titlebar_version):
+    for _drag_widget in (titlebar, titlebar_tools):
         try:
             _drag_widget.bind("<ButtonPress-1>", _neto_titlebar_drag_start)
             _drag_widget.bind("<B1-Motion>", _neto_titlebar_drag_motion)
@@ -11515,6 +13269,17 @@ if __name__ == '__main__':
             titlebar_version.configure(text_color=aktif_palet["text_dim"])
             titlebar_logo.configure(text_color=aktif_palet["neon"])
             titlebar_accent_line.configure(fg_color=aktif_palet["neon"])
+            titlebar_tools.configure(fg_color="transparent")
+            for card in titlebar_tool_cards:
+                card.configure(
+                    fg_color=aktif_palet["card"],
+                    border_color=aktif_palet["entry_border"],
+                )
+                card._neto_tool_base = aktif_palet["card"]
+                card._neto_tool_hover = aktif_palet["button_hover"]
+                card._neto_tool_icon.configure(text_color=aktif_palet["neon"])
+                card._neto_tool_title.configure(text_color=aktif_palet["text_dim"])
+                card._neto_tool_value.configure(text_color=aktif_palet["text_main"])
             for name, button in (("quick", titlebar_quick_btn), ("min", titlebar_min_btn), ("max", titlebar_max_btn), ("close", titlebar_close_btn)):
                 text = aktif_palet["neon"] if name == "close" else aktif_palet["text_dim"]
                 border = aktif_palet["neon"] if name == "close" else aktif_palet["sidebar"]
@@ -11581,7 +13346,7 @@ if __name__ == '__main__':
     )
 
 
-    global side_panel, main_c, chat_container, input_container, giris_frame, not_alani
+    global side_panel, context_panel, main_c, chat_container, input_container, giris_frame, not_alani, home_dashboard_surface
     global etiket, giris, btn_gonder, gif_ana_label, cpu_l, ram_l, btn_ayarlar, btn_gelismis, btn_anahtar, btn_netoai, btn_scenes, btn_updates, btn_dil, lbl_sistem_durumu, lbl_now_playing, lbl_now_playing_detay, lbl_notlar, lbl_sistem, lbl_magaza, lbl_welcome, compact_settings_btn
     btn_ayarlar = None
     btn_gelismis = None
@@ -11604,11 +13369,22 @@ if __name__ == '__main__':
         app_content,
         width=PANEL_WIDTH,
         fg_color=aktif_palet["sidebar"],
-        corner_radius=18,
+        corner_radius=FLUENT_RADII["card"],
         border_width=1,
         border_color=aktif_palet["entry_border"],
     )
     side_panel.pack_propagate(False)
+
+    def _neto_legacy_sidebar_hide():
+        """Keep the retired CPU/RAM icon rail out of the active UI."""
+        try:
+            side_panel._neto_legacy_hidden = True
+            if side_panel.winfo_manager() == "pack":
+                side_panel.pack_forget()
+            elif side_panel.winfo_manager() == "place":
+                side_panel.place_forget()
+        except Exception:
+            pass
 
     # Sidebar''ın üstünde ayrı bir kontrol satırı: hamburger/X artık ana yüzeye
     # place edilmez ve içerik butonlarının üzerine taşamaz.
@@ -11620,6 +13396,8 @@ if __name__ == '__main__':
     )
     sidebar_header.pack(fill="x", side="top")
     sidebar_header.pack_propagate(False)
+    # Hamburger menüsü kaldırıldı; içerik doğrudan panelin üstünden başlar.
+    sidebar_header.pack_forget()
 
     # Sol alttaki Ayarlar çubuğu içeriklerin üstüne binmesin diye menü gövdesi
     # ayrı ve kaydırılabilir tutulur. Alt 66 px yalnızca sabit Ayarlar sekmesine aittir.
@@ -11722,15 +13500,11 @@ if __name__ == '__main__':
         command=lambda: hamburger_toggle(),
     )
     def _hamburger_konumla():
-        """Keep the menu control in the sidebar header across every layout mode."""
+        """Legacy layout hook; the hamburger control is intentionally hidden."""
         try:
-            hamburger_btn.pack_configure(side="right", padx=(0, 8), pady=7)
-            sidebar_header.lift()
+            hamburger_btn.pack_forget()
         except Exception:
-            try:
-                hamburger_btn.pack(side="right", padx=(0, 8), pady=7)
-            except Exception:
-                pass
+            pass
     _hamburger_konumla()
 
     def _button_style(btn):
@@ -11777,6 +13551,14 @@ if __name__ == '__main__':
             else:
                 cpu_l.configure(text=f"CPU: %{cpu:.0f}")
                 ram_l.configure(text=f"RAM: %{ram:.0f}")
+            try:
+                unified_cpu = globals().get("unified_cpu_label")
+                unified_ram = globals().get("unified_ram_label")
+                if unified_cpu is not None and unified_ram is not None:
+                    unified_cpu.configure(text=f"%{cpu:.0f}")
+                    unified_ram.configure(text=f"%{ram:.0f}")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -11833,7 +13615,9 @@ if __name__ == '__main__':
         justify="left",
         cursor="hand2"
     )
-    lbl_now_playing.pack(pady=(8, 0), padx=18, fill="x")
+    _netoplay_register_ui_item(
+        "sidebar_media_title", lbl_now_playing, pady=(8, 0), padx=18, fill="x"
+    )
 
     lbl_now_playing_detay = ctk.CTkLabel(
         sidebar_content,
@@ -11844,7 +13628,9 @@ if __name__ == '__main__':
         justify="left",
         cursor="hand2"
     )
-    lbl_now_playing_detay.pack(pady=(2, 6), padx=18, fill="x")
+    _netoplay_register_ui_item(
+        "sidebar_media_detail", lbl_now_playing_detay, pady=(2, 6), padx=18, fill="x"
+    )
     try:
         lbl_now_playing.bind("<Button-1>", lambda e: now_playing_manual_open(force=True))
         lbl_now_playing_detay.bind("<Button-1>", lambda e: now_playing_manual_open(force=True))
@@ -11860,7 +13646,9 @@ if __name__ == '__main__':
         corner_radius=8,
         command=now_playing_open_settings_safe
     )
-    btn_now_playing_ayar.pack(padx=20, fill="x", pady=(4, 4))
+    _netoplay_register_ui_item(
+        "sidebar_media_settings", btn_now_playing_ayar, padx=20, fill="x", pady=(4, 4)
+    )
 
     btn_now_playing_baslat = ctk.CTkButton(
         sidebar_content,
@@ -11872,7 +13660,9 @@ if __name__ == '__main__':
         corner_radius=8,
         command=lambda: now_playing_manual_open(force=True)
     )
-    btn_now_playing_baslat.pack(padx=20, fill="x", pady=(0, 8))
+    _netoplay_register_ui_item(
+        "sidebar_media_open", btn_now_playing_baslat, padx=20, fill="x", pady=(0, 8)
+    )
 
     if K_PSUTIL:
         # İlk psutil örneğini ana pencereyi kurarken değil, ölçüm metni görünürken al.
@@ -11920,14 +13710,31 @@ if __name__ == '__main__':
 
     btn_android_device = ctk.CTkButton(
         sidebar_content,
-        text=T("device_hub"),
+        text="Remote",
         font=("Segoe UI Semibold", 12),
         fg_color=aktif_palet["card"],
         hover_color=aktif_palet["button_hover"],
         corner_radius=8,
-        command=neto_device_hub_ac_safe
+        command=neto_remote_surface_launch_safe
     )
     btn_android_device.pack(padx=20, fill="x", pady=4)
+
+    btn_power_center = ctk.CTkButton(
+        sidebar_content,
+        text="Güç Merkezi",
+        font=("Segoe UI Semibold", 12),
+        fg_color=aktif_palet["card"],
+        hover_color=aktif_palet["button_hover"],
+        text_color=aktif_palet["text_main"],
+        corner_radius=8,
+        command=neto_power_center_ac_safe,
+    )
+    btn_power_center.pack(padx=20, fill="x", pady=4)
+    try:
+        _neto_lazy_import("neto_power_features").start_activity_watcher(root)
+    except Exception:
+        pass
+
     btn_automation = ctk.CTkButton(
         sidebar_content,
         text="Otomasyon Merkezi",
@@ -11985,6 +13792,7 @@ if __name__ == '__main__':
             eklenti_aktif_mi = False
         else:
             eklenti_aktif_mi = True
+        _netoplay_sync_ui()
         try:
             btn_anahtar.configure(
                 fg_color="#00c46a" if eklenti_aktif_mi else "#b32424",
@@ -12296,6 +14104,9 @@ if __name__ == '__main__':
         widget = _sidebar_widget(name)
         if not widget:
             return
+        from neto_sidebar_icons import apply as apply_sidebar_icon
+        if apply_sidebar_icon(widget, name, buyuk, bool(sidebar_state.get("compact", False))):
+            return
         # Neto Experience 3.0 (v1.40 eklentisi - YALNIZCA EKLEME):
         # kompakt modda "AUTO/NET/SHOP" kisaltmasi yerine gercek ikon.
         # Modul yoksa veya 3.0 kapaliysa asagidaki eski davranis aynen calisir.
@@ -12360,74 +14171,10 @@ if __name__ == '__main__':
     def _sidebar_pack_ikon(widget, primary=False):
         if not widget:
             return
-        try:
-            widget._neto_custom_motion = False
-            widget.configure(
-                width=58,
-                height=36,
-                corner_radius=15,
-                border_width=1,
-                border_color=aktif_palet["neon"] if primary else aktif_palet["entry_border"],
-                fg_color=aktif_palet["neon"] if primary else aktif_palet["card"],
-                hover_color=aktif_palet.get("accent_hover", aktif_palet["button_hover"]) if primary else aktif_palet["button_hover"],
-                text_color=_tema_vurgu_metin_rengi() if primary else aktif_palet["text_main"],
-                font=("Segoe UI Semibold", 10, "bold"),
-                anchor="center",
-            )
-        except Exception:
-            pass
-        # Neto Experience 3.0 (v1.40 eklentisi - YALNIZCA EKLEME):
-        # Ray butonunu buyutup ikonu irileştirir. Ayar kapaliysa hicbir sey
-        # olmaz ve yukaridaki varsayilan olculer (58x36, font 10) gecerli kalir.
-        try:
-            import neto_experience3 as _nx3_ray
-            _nx3_metrik = _nx3_ray.rail_button_metrics()
-            if _nx3_metrik:
-                widget.configure(
-                    height=_nx3_metrik["height"],
-                    corner_radius=_nx3_metrik["radius"],
-                    border_width=0,
-                    font=(_nx3_metrik["font_family"], _nx3_metrik["font_size"], "bold"),
-                )
-                # 3.0: ray genisligi 104 px ve kaydirma cubugu ~16 px aliyor.
-                # Varsayilan padx=22 ile butona ~44 px kaliyor ve buyuk ikon
-                # kirpiliyor; bu yuzden ic bosluk kucultulur.
-                _sidebar_pack_yeniden(
-                    widget,
-                    fill="none",
-                    padx=_nx3_metrik.get("padx", 8),
-                    pady=_nx3_metrik.get("pady", 5),
-                )
-        except Exception:
-            pass
-        try:
-            _sidebar_pack_yeniden(widget, fill="none", padx=22, pady=6)
-        except Exception:
-            pass
-        # Neto Experience 3.0 - SON SÖZ (v1.40 eklentisi, YALNIZCA EKLEME):
-        # Yukarıdaki padx=22'lik paketleme, büyük ikon için gereken genişliği
-        # geri alıp glifleri kırpıyor. Bu yüzden ölçüler uygulamanın
-        # paketlemesinden SONRA bir kez daha yazılır.
-        try:
-            import neto_experience3 as _nx3_ray2
-            _nx3_metrik2 = _nx3_ray2.rail_button_metrics()
-            if _nx3_metrik2:
-                widget.configure(
-                    width=_nx3_metrik2.get("width", 58),
-                    height=_nx3_metrik2["height"],
-                    corner_radius=_nx3_metrik2["radius"],
-                    border_width=0,
-                    font=(_nx3_metrik2["font_family"], _nx3_metrik2["font_size"], "bold"),
-                )
-                _sidebar_pack_yeniden(
-                    widget,
-                    fill="none",
-                    padx=_nx3_metrik2.get("padx", 8),
-                    pady=_nx3_metrik2.get("pady", 5),
-                )
-        except Exception:
-            pass
-        _sidebar_icon_hover_bind(widget, primary=primary)
+        widget.configure(width=44, height=40, corner_radius=10, border_width=0,
+                         fg_color="transparent", hover_color=aktif_palet["button_hover"],
+                         text_color=aktif_palet["text_main"], anchor="center")
+        _sidebar_pack_yeniden(widget, fill="none", padx=10, pady=3)
 
     def _sidebar_pack_genis(widget, primary=False):
         if not widget:
@@ -12577,7 +14324,7 @@ if __name__ == '__main__':
         except Exception:
             pass
 
-    def _sidebar_metinleri_yenile():
+    def _sidebar_metinleri_yenile(*, update_width=True):
         icon_mode = bool(sidebar_state.get("compact", False))
         tr_mode = str(dil_getir()).lower().startswith("tr")
 
@@ -12614,12 +14361,8 @@ if __name__ == '__main__':
         try:
             anahtar_widget = _sidebar_widget("btn_anahtar")
             if anahtar_widget:
-                if icon_mode:
-                    anahtar_widget.configure(text="ON" if eklenti_aktif_mi else "OFF")
-                else:
-                    anahtar_widget.configure(
-                        text=T("extension_status_on") if eklenti_aktif_mi else T("extension_status_off")
-                    )
+                _sidebar_text_yaz("btn_anahtar",
+                                  T("extension_status_on") if eklenti_aktif_mi else T("extension_status_off"), "")
         except Exception:
             pass
 
@@ -12627,11 +14370,11 @@ if __name__ == '__main__':
             try:
                 anahtar_widget = _sidebar_widget("btn_anahtar")
                 if anahtar_widget:
-                    if _sidebar_icon_only_mode:
+                    if _sidebar_icon_only_mode or icon_mode:
                         anahtar_widget.configure(
-                            fg_color="transparent",
-                            hover_color="#2A2A2D",
-                            text_color="#B8B8BC",
+                            fg_color=aktif_palet["card"] if eklenti_aktif_mi else "transparent",
+                            hover_color=aktif_palet["button_hover"],
+                            text_color=aktif_palet["text_main"],
                             border_width=0,
                             border_color=aktif_palet["sidebar"],
                         )
@@ -12685,7 +14428,7 @@ if __name__ == '__main__':
             if not _sidebar_icon_only_mode:
                 _sidebar_goster("cpu_l")
                 _sidebar_goster("ram_l")
-                _sidebar_pack_kompakt_stat(_sidebar_widget("cpu_l"), vurgu=False, ilk=True)
+                _sidebar_pack_kompakt_stat(_sidebar_widget("cpu_l"), vurgu=False, ilk=False)
                 _sidebar_pack_kompakt_stat(_sidebar_widget("ram_l"), vurgu=True)
             else:
                 _sidebar_gizle("cpu_l")
@@ -12696,19 +14439,6 @@ if __name__ == '__main__':
             _sidebar_gizle("settings_identity")
             _sidebar_gizle("settings_chevron")
             _sidebar_gizle("settings_title_label")
-            if not _sidebar_icon_only_mode:
-                try:
-                    lbl_now_playing.configure(
-                        width=58,
-                        height=28,
-                        text_color=aktif_palet["neon"],
-                        font=("Segoe UI Semibold", 17),
-                        anchor="center",
-                        justify="center",
-                    )
-                    _sidebar_pack_yeniden(lbl_now_playing, fill="none", padx=23, pady=(18, 5))
-                except Exception:
-                    pass
             _sidebar_pack_ikon(_sidebar_widget("btn_now_playing_ayar"), primary=False)
             _sidebar_pack_ikon(_sidebar_widget("btn_now_playing_baslat"), primary=False)
             _sidebar_pack_ikon(_sidebar_widget("btn_netoai"), primary=False)
@@ -12834,12 +14564,18 @@ if __name__ == '__main__':
                 pass
 
         try:
-            hamburger_btn.configure(text="☰" if icon_mode else "×")
+            from neto_sidebar_icons import icon as sidebar_icon
+            hamburger_btn._neto_modern_skip = True
+            hamburger_btn.configure(text="", image=sidebar_icon("panel"), border_width=0,
+                                    corner_radius=10, fg_color="transparent")
+            settings_avatar.configure(text="", image=sidebar_icon("settings"),
+                                      fg_color="transparent")
         except Exception:
             pass
 
         try:
-            _sidebar_genislik_uygula(sidebar_compact_width if icon_mode else PANEL_WIDTH)
+            if update_width:
+                _sidebar_genislik_uygula(sidebar_compact_width if icon_mode else PANEL_WIDTH)
         except Exception:
             pass
 
@@ -12873,8 +14609,7 @@ if __name__ == '__main__':
         from neto_motion_engine_v2 import get_motion_engine
         engine = get_motion_engine(root)
         engine.cancel("sidebar-width")
-        if persist:
-            sidebar_state["compact"] = not bool(expanded)
+        sidebar_state["compact"] = not bool(expanded)
         target = sidebar_compact_width if _sidebar_icon_only_mode else (PANEL_WIDTH if expanded else sidebar_compact_width)
         start = int(sidebar_state.get("current_width", target))
         side_panel.pack_propagate(False)
@@ -12893,7 +14628,7 @@ if __name__ == '__main__':
         # Short labels fit for the entire transition. Restore full labels once.
         desired = sidebar_state["compact"]
         sidebar_state["compact"] = True
-        _sidebar_metinleri_yenile()
+        _sidebar_metinleri_yenile(update_width=False)
         sidebar_state["compact"] = desired
         last_width = [start]
 
@@ -12977,6 +14712,13 @@ if __name__ == '__main__':
         )
         btn.pack(padx=18, fill="x", pady=4)
         return btn
+
+    # Mağaza paneli aşağıdaki UI hazırlıklarının devamında tanımlanır. İlk
+    # butonlar oluşturulurken isim henüz bağlanmamış olabileceği için güvenli
+    # bir ileri bildirim köprüsü kullanılır; gerçek tanım daha sonra bunun
+    # üzerine yazılır.
+    def eklenti_magazasi_panel_toggle(event=None):
+        return "break"
 
     _agent_menu_buton("Yeni sohbet", lambda: _neto_agent_panel_aksiyon("Yeni sohbet açılıyor.", f"Yeni bir {APP_NAME} Agent sohbeti başlat."))
     _agent_menu_buton("Pull request'ler", lambda: _neto_agent_panel_aksiyon("Pull request'ler bölümü şimdilik hazırlık aşamasında."))
@@ -13110,6 +14852,521 @@ if __name__ == '__main__':
     # v10.27: Eski sol panel eklenti kısayol listesi kaldırıldı.
     # Sadece yeni Extension Store paneli kullanılacak.
 
+    # ------------------------------------------------------------
+    # NETOPS WORKSPACE RAIL v1.41
+    # Görsel 1'deki üretken çalışma alanı düzeninin NetOps uyarlaması.
+    # Sol ray yalnızca modül ikonlarını taşır; bu panel ise metinli çalışma
+    # alanı kısayollarını taşır. Komutlar mevcut motorlara bağlanır.
+    # ------------------------------------------------------------
+    context_panel = ctk.CTkFrame(
+        app_content,
+        width=210,
+        fg_color=aktif_palet["sidebar"],
+        corner_radius=0,
+        border_width=1,
+        border_color=aktif_palet["entry_border"],
+    )
+    context_panel.pack_propagate(False)
+
+    context_header = ctk.CTkFrame(context_panel, fg_color="transparent", height=58)
+    context_header.pack(fill="x", padx=14, pady=(12, 4))
+    context_header.pack_propagate(False)
+
+    context_brand = ctk.CTkLabel(
+        context_header,
+        text="NETOPS",
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 15),
+        anchor="w",
+    )
+    context_brand.pack(side="left", fill="x", expand=True, pady=(3, 0))
+
+    context_version = ctk.CTkLabel(
+        context_header,
+        text=APP_VERSION,
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 9),
+        anchor="e",
+    )
+    context_version.pack(side="right", pady=(5, 0))
+
+    context_body = ctk.CTkScrollableFrame(
+        context_panel,
+        fg_color=aktif_palet["sidebar"],
+        corner_radius=0,
+        border_width=0,
+        scrollbar_button_color=aktif_palet["card"],
+        scrollbar_button_hover_color=aktif_palet["button_hover"],
+    )
+    context_body.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+    _neto_scrollable_frame_renklendir(context_body, aktif_palet, "sidebar")
+
+    try:
+        from neto_sidebar_icons import icon as _workspace_icon
+    except Exception:
+        _workspace_icon = None
+
+    context_buttons = []
+
+    def _context_icon(kind):
+        try:
+            return _workspace_icon(kind, 17) if _workspace_icon else None
+        except Exception:
+            return None
+
+    def _context_new_chat():
+        try:
+            _neto_sohbet_temizle()
+            _neto_sohbet_ekrani_ac()
+            animasyonlu_yazi(T("main_hello"))
+        except Exception:
+            pass
+
+    def _context_button(text, command, kind=None, accent=False):
+        button = ctk.CTkButton(
+            context_body,
+            text=text,
+            image=_context_icon(kind) if kind else None,
+            compound="left",
+            anchor="w",
+            height=36,
+            corner_radius=10,
+            fg_color=aktif_palet["neon"] if accent else aktif_palet["card"],
+            hover_color=aktif_palet.get("accent_hover", aktif_palet["button_hover"]),
+            text_color=_tema_vurgu_metin_rengi() if accent else aktif_palet["text_main"],
+            font=("Segoe UI Semibold", 11),
+            command=command,
+        )
+        # This surface already owns its image icon. Do not let the legacy
+        # Experience3 glyph pass add a second icon beside it.
+        button._neto_modern_skip = True
+        button._neto_icon_source = "neto_sidebar_icons"
+        button.configure(text=text, compound="left")
+        button.pack(fill="x", padx=4, pady=3)
+        context_buttons.append((button, accent))
+        return button
+
+    context_new_button = _context_button(
+        "＋  Yeni sohbet", _context_new_chat, "chat", accent=True
+    )
+
+    context_chat_title = ctk.CTkLabel(
+        context_body,
+        text="ÇALIŞMA ALANI" if str(dil_getir()).lower().startswith("tr") else "WORKSPACE",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 10),
+        anchor="w",
+    )
+    context_chat_title.pack(fill="x", padx=8, pady=(18, 6))
+
+    _context_button(
+        "Şimdi Çalıyor", lambda: now_playing_manual_open(force=True), "music"
+    )
+    _context_button(
+        "NetOps Agent", lambda: _neto_agent_modu_ac(duyuru=False), "workflow"
+    )
+    _context_button(
+        "Otomasyonlar", neto_otomasyon_merkezi_ac, "layers"
+    )
+    _context_button(
+        "Eklentiler", lambda: eklenti_magazasi_panel_toggle(), "store"
+    )
+
+    context_recent_title = ctk.CTkLabel(
+        context_body,
+        text="SON OTURUMLAR" if str(dil_getir()).lower().startswith("tr") else "RECENT",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 10),
+        anchor="w",
+    )
+    context_recent_title.pack(fill="x", padx=8, pady=(20, 6))
+
+    def _context_recent_action(message):
+        def _run():
+            try:
+                _neto_sohbet_ekrani_ac()
+                animasyonlu_yazi(message)
+            except Exception:
+                pass
+        return _run
+
+    _context_button("NetOps başlangıç oturumu", _context_new_chat, "chat")
+    _context_button(
+        "Müzik ve Now Playing",
+        _context_recent_action("Now Playing oturumu hazır."),
+        "music",
+    )
+    _context_button(
+        "Sistem araçları",
+        _context_recent_action("Sistem araçları çalışma alanı hazır."),
+        "devices",
+    )
+
+    context_hint = ctk.CTkLabel(
+        context_body,
+        text="Kısayollarını buradan aç. Ana yüzeyde sohbet, müzik ve araçlar arasında geçiş yap.",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 10),
+        justify="left",
+        anchor="w",
+        wraplength=175,
+    )
+    context_hint.pack(fill="x", padx=8, pady=(18, 8))
+
+    context_settings = ctk.CTkButton(
+        context_panel,
+        text="⚙  Ayarlar",
+        image=_context_icon("settings"),
+        compound="left",
+        anchor="w",
+        height=38,
+        corner_radius=10,
+        fg_color=aktif_palet["card"],
+        hover_color=aktif_palet["button_hover"],
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 11),
+        command=lambda: ayarlar_sayfasi_ac("general"),
+    )
+    context_settings.pack(side="bottom", fill="x", padx=12, pady=(4, 12))
+
+    globals()["context_panel"] = context_panel
+    globals()["context_buttons"] = context_buttons
+    globals()["context_body"] = context_body
+
+    # ------------------------------------------------------------
+    # UNIFIED SIDEBAR v1.41
+    # Eski ikon rayı ve orta çalışma paneli artık tek bir dış bar içinde
+    # gösterilir. Eski widget'lar geriye dönük ayar/komut akışları için
+    # bellekte tutulur, fakat kullanıcıya ikinci bir panel olarak çizilmez.
+    # ------------------------------------------------------------
+    unified_sidebar = ctk.CTkFrame(
+        app_content,
+        # ZenkaMind benzeri dar çalışma alanı: navigasyon okunaklı kalır,
+        # sohbet yüzeyi gereksiz yere daralmaz.
+        width=FLUENT_NAV_WIDTH,
+        fg_color=aktif_palet["sidebar"],
+        corner_radius=0,
+        border_width=0,
+        border_color=aktif_palet["entry_border"],
+    )
+    unified_sidebar.pack_propagate(False)
+
+    unified_icon_bar = ctk.CTkFrame(
+        unified_sidebar,
+        width=64,
+        fg_color=_neto_hex_karistir(aktif_palet["sidebar"], "#000000", 0.20),
+        corner_radius=0,
+    )
+    unified_icon_bar.pack(side="left", fill="y")
+    unified_icon_bar.pack_propagate(False)
+
+    unified_icon_logo = ctk.CTkLabel(
+        unified_icon_bar,
+        text="▲",
+        text_color=aktif_palet["neon"],
+        font=("Segoe UI Black", 22),
+        height=48,
+    )
+    unified_icon_logo.pack(fill="x", pady=(8, 4))
+
+    unified_icon_buttons = []
+
+    def _unified_icon_button(kind, command, active=False):
+        button = ctk.CTkButton(
+            unified_icon_bar,
+            text="",
+            image=_context_icon(kind),
+            width=42,
+            height=42,
+            corner_radius=10,
+            fg_color=aktif_palet["neon"] if active else "transparent",
+            hover_color=aktif_palet.get("accent_hover", aktif_palet["button_hover"]),
+            text_color=_tema_vurgu_metin_rengi() if active else aktif_palet["text_main"],
+            border_width=0,
+            command=command,
+        )
+        button._neto_modern_skip = True
+        button._neto_icon_source = "neto_sidebar_icons"
+        button.pack(padx=10, pady=5)
+        unified_icon_buttons.append((button, active))
+        return button
+
+    _unified_icon_button("chat", _context_new_chat, active=True)
+    _unified_icon_button("music", lambda: now_playing_manual_open(force=True))
+    _unified_icon_button("workflow", lambda: _neto_agent_modu_ac(duyuru=False))
+    _unified_icon_button("layers", neto_otomasyon_merkezi_ac)
+    _unified_icon_button("store", lambda: eklenti_magazasi_panel_toggle())
+
+    unified_icon_spacer = ctk.CTkFrame(unified_icon_bar, fg_color="transparent")
+    unified_icon_spacer.pack(fill="both", expand=True)
+    _unified_icon_button("settings", lambda: ayarlar_sayfasi_ac("general"))
+
+    # Görsel 2 tek panel kullandığı için ikon rayı artık çizilmez; butonlar
+    # geriye dönük kısayol referansları olarak tutulur.
+    unified_icon_bar.pack_forget()
+
+    unified_nav = ctk.CTkFrame(unified_sidebar, fg_color=aktif_palet["sidebar"], corner_radius=0)
+    unified_nav.pack(side="top", fill="both", expand=True)
+
+    unified_nav_header = ctk.CTkFrame(unified_nav, fg_color="transparent", height=76)
+    unified_nav_header.pack(fill="x", padx=20, pady=(14, 4))
+    unified_nav_header.pack_propagate(False)
+
+    unified_nav_logo_image = None
+    try:
+        _unified_logo_path = get_asset_path("neto_titlebar_logo.png")
+        if _unified_logo_path and os.path.exists(_unified_logo_path):
+            _unified_logo_source = Image.open(_unified_logo_path).convert("RGBA")
+            unified_nav_logo_image = ctk.CTkImage(
+                light_image=_unified_logo_source,
+                dark_image=_unified_logo_source,
+                size=(42, 42),
+            )
+    except Exception:
+        unified_nav_logo_image = None
+
+    unified_nav_logo = ctk.CTkLabel(
+        unified_nav_header,
+        text="" if unified_nav_logo_image else "",
+        image=unified_nav_logo_image,
+        text_color=aktif_palet["neon"],
+        width=42,
+        height=42,
+    )
+    unified_nav_logo.pack(side="left", padx=(0, 12), pady=(0, 2))
+
+    unified_nav_brand = ctk.CTkLabel(
+        unified_nav_header,
+        text="NETOPS",
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 19),
+        anchor="w",
+    )
+    unified_nav_brand.pack(side="left", fill="x", expand=True, pady=(3, 0))
+
+    unified_nav_version = ctk.CTkLabel(
+        unified_nav_header,
+        text=APP_VERSION,
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 9),
+        anchor="e",
+    )
+    unified_nav_version.pack(side="right", pady=(5, 0))
+
+    unified_nav_rule = ctk.CTkFrame(
+        unified_nav,
+        height=1,
+        fg_color=aktif_palet["entry_border"],
+        corner_radius=0,
+    )
+    unified_nav_rule.pack(fill="x", padx=20, pady=(0, 8))
+    unified_nav_rule.pack_propagate(False)
+
+    unified_nav_body = ctk.CTkScrollableFrame(
+        unified_nav,
+        fg_color=aktif_palet["sidebar"],
+        corner_radius=0,
+        border_width=0,
+        scrollbar_button_color=aktif_palet["card"],
+        scrollbar_button_hover_color=aktif_palet["button_hover"],
+    )
+    unified_nav_body.pack(fill="both", expand=True, padx=(14, 10), pady=(0, 8))
+    _neto_scrollable_frame_renklendir(unified_nav_body, aktif_palet, "sidebar")
+
+    unified_nav_buttons = []
+
+    def _unified_nav_button(text, command, kind=None, active=False):
+        button = ctk.CTkButton(
+            unified_nav_body,
+            text=text,
+            image=_context_icon(kind) if kind else None,
+            compound="left",
+            anchor="w",
+            height=FLUENT_CONTROL_HEIGHT,
+            corner_radius=FLUENT_RADII["control"],
+            fg_color=aktif_palet["card_elevated"] if active else "transparent",
+            hover_color=(
+                aktif_palet.get("card_elevated", aktif_palet["button_hover"])
+                if active
+                else aktif_palet["button_hover"]
+            ),
+            text_color=aktif_palet["neon"] if active else aktif_palet["text_main"],
+            font=("Segoe UI Semibold", 11),
+            border_width=0,
+            border_color=aktif_palet["card_elevated"] if active else aktif_palet["sidebar"],
+            command=command,
+        )
+        # Keep one source of truth for icons on the unified navigation rail.
+        # Experience3 must not replace the label with another glyph.
+        button._neto_modern_skip = True
+        button._neto_icon_source = "neto_sidebar_icons"
+        button.configure(text=text, compound="left")
+        button.pack(fill="x", padx=2, pady=3)
+        unified_nav_buttons.append((button, active))
+        return button
+
+    _unified_nav_button("＋  Komut konsolu", _context_new_chat, "chat", active=False)
+
+    unified_nav_workspace_title = ctk.CTkLabel(
+        unified_nav_body,
+        text="Çalışma alanı",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 11),
+        anchor="w",
+    )
+    unified_nav_workspace_title.pack(fill="x", padx=8, pady=(18, 6))
+    _unified_nav_button(
+        "Genel Bakış",
+        lambda: globals().get("show_home_dashboard", lambda: None)(),
+        "overview",
+        active=True,
+    )
+    _unified_nav_button("Cihazlar", neto_device_hub_ac_safe, "devices")
+    _unified_nav_button("Now Playing", lambda: now_playing_manual_open(force=True), "music")
+    _unified_nav_button("Otomasyonlar", neto_otomasyon_merkezi_ac, "layers")
+    _unified_nav_button("Remote", neto_remote_surface_launch_safe, "remote")
+
+    unified_nav_data_title = ctk.CTkLabel(
+        unified_nav_body,
+        text="Sistem durumu",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 11),
+        anchor="w",
+    )
+    unified_nav_data_title.pack(fill="x", padx=8, pady=(20, 6))
+
+    unified_metrics_card = ctk.CTkFrame(
+        unified_nav_body,
+        fg_color=_neto_hex_karistir(aktif_palet["sidebar"], aktif_palet["card"], 0.55),
+        corner_radius=FLUENT_RADII["card"],
+        border_width=0,
+        border_color=aktif_palet["entry_border"],
+    )
+    unified_metrics_card.pack(fill="x", padx=2, pady=(0, 5))
+    unified_metrics_card.grid_columnconfigure((0, 1), weight=1)
+
+    unified_cpu_label = ctk.CTkLabel(
+        unified_metrics_card,
+        text="% Ölçülüyor...",
+        text_color=aktif_palet["neon"],
+        font=("Segoe UI Semibold", 15),
+    )
+    unified_cpu_label.grid(row=0, column=0, padx=(12, 5), pady=(9, 0), sticky="ew")
+    unified_ram_label = ctk.CTkLabel(
+        unified_metrics_card,
+        text="% Ölçülüyor...",
+        text_color=aktif_palet["neon"],
+        font=("Segoe UI Semibold", 15),
+    )
+    unified_ram_label.grid(row=0, column=1, padx=(5, 12), pady=(9, 0), sticky="ew")
+    ctk.CTkLabel(
+        unified_metrics_card,
+        text="CPU",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 9),
+    ).grid(row=1, column=0, padx=(12, 5), pady=(0, 9), sticky="ew")
+    ctk.CTkLabel(
+        unified_metrics_card,
+        text="RAM",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 9),
+    ).grid(row=1, column=1, padx=(5, 12), pady=(0, 9), sticky="ew")
+    globals()["unified_cpu_label"] = unified_cpu_label
+    globals()["unified_ram_label"] = unified_ram_label
+
+    unified_now_playing_card = ctk.CTkFrame(
+        unified_nav_body,
+        fg_color=_neto_hex_karistir(aktif_palet["sidebar"], aktif_palet["card"], 0.72),
+        corner_radius=FLUENT_RADII["card"],
+        border_width=0,
+        border_color=aktif_palet["entry_border"],
+    )
+    unified_now_playing_card.pack(fill="x", padx=2, pady=(0, 6))
+    unified_now_playing_card.bind("<Button-1>", lambda _event: now_playing_manual_open(force=True))
+    unified_now_playing_badge = ctk.CTkLabel(
+        unified_now_playing_card,
+        text="♫  ŞİMDİ ÇALIYOR",
+        text_color=aktif_palet["neon"],
+        font=("Segoe UI Semibold", 9),
+        anchor="w",
+    )
+    unified_now_playing_badge.pack(fill="x", padx=12, pady=(9, 2))
+    unified_now_playing_title = ctk.CTkLabel(
+        unified_now_playing_card,
+        text="Müzik bekleniyor",
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 12),
+        anchor="w",
+        justify="left",
+    )
+    unified_now_playing_title.pack(fill="x", padx=12, pady=(0, 1))
+    unified_now_playing_detail = ctk.CTkLabel(
+        unified_now_playing_card,
+        text="Şimdi Çalıyor'u açınca parça bilgisi burada görünür.",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 9),
+        anchor="w",
+        justify="left",
+        wraplength=255,
+    )
+    unified_now_playing_detail.pack(fill="x", padx=12, pady=(0, 9))
+    for _widget in (unified_now_playing_badge, unified_now_playing_title, unified_now_playing_detail):
+        _widget.bind("<Button-1>", lambda _event: now_playing_manual_open(force=True))
+    globals()["unified_now_playing_title"] = unified_now_playing_title
+    globals()["unified_now_playing_detail"] = unified_now_playing_detail
+
+    _unified_nav_button("Günlükler", lambda: neto_log_penceresi_ac(), "logs")
+    _unified_nav_button("Komut Arenası", neto_command_arena_ac_safe, "workflow")
+
+    unified_nav_services_title = ctk.CTkLabel(
+        unified_nav_body,
+        text="Araçlar",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 11),
+        anchor="w",
+    )
+    unified_nav_services_title.pack(fill="x", padx=8, pady=(20, 6))
+    _unified_nav_button("Bildirimler", _context_recent_action("Bildirim merkezi hazır."), "notifications")
+    _unified_nav_button("Eklentiler", lambda: eklenti_magazasi_panel_toggle(), "store")
+    _unified_nav_button("Araçlar", neto_sahneler_merkezi_ac, "layers")
+
+    unified_nav_hint = ctk.CTkLabel(
+        unified_nav_body,
+        text="NetOps çalışma alanı",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI", 10),
+        anchor="w",
+    )
+    unified_nav_hint.pack(fill="x", padx=8, pady=(18, 8))
+
+    unified_nav_settings = ctk.CTkButton(
+        unified_nav,
+        text="Ayarlar",
+        image=_context_icon("settings"),
+        compound="left",
+        anchor="w",
+        height=FLUENT_CONTROL_HEIGHT,
+        corner_radius=FLUENT_RADII["control"],
+        fg_color=aktif_palet["card"],
+        hover_color=aktif_palet["button_hover"],
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 11),
+        border_width=0,
+        border_color=aktif_palet["card"],
+        command=lambda: ayarlar_sayfasi_ac("general"),
+    )
+    unified_nav_settings._neto_modern_skip = True
+    unified_nav_settings._neto_icon_source = "neto_sidebar_icons"
+    unified_nav_settings.configure(text="Ayarlar", compound="left")
+    unified_nav_settings.pack(side="bottom", fill="x", padx=20, pady=(4, 14))
+
+    globals()["unified_sidebar"] = unified_sidebar
+    globals()["unified_icon_bar"] = unified_icon_bar
+    globals()["unified_nav"] = unified_nav
+    globals()["unified_nav_body"] = unified_nav_body
+    globals()["unified_icon_buttons"] = unified_icon_buttons
+    globals()["unified_nav_buttons"] = unified_nav_buttons
+
     # --------------------
     # ANA SOHBET ALANI
     # --------------------
@@ -13124,8 +15381,8 @@ if __name__ == '__main__':
     gif_ana_label = ctk.CTkLabel(
         hero_content,
         text="",
-        width=236,
-        height=236,
+        width=176,
+        height=176,
         fg_color="transparent",
     )
     gif_ana_label.pack(pady=(0, 10))
@@ -13242,12 +15499,12 @@ if __name__ == '__main__':
                     ctk.CTkImage(
                         light_image=light_image,
                         dark_image=dark_image,
-                        size=(230, 230),
+                        size=(172, 172),
                     )
                 )
 
             oynatici(kareler, sureler)
-            print(f"[LOGO] Kullanıcı GIF'i yüklendi: {len(kareler)} kare, 230x230", flush=True)
+            print(f"[LOGO] Kullanıcı GIF'i yüklendi: {len(kareler)} kare, 172x172", flush=True)
             return
         except Exception as logo_error:
             try:
@@ -13270,7 +15527,7 @@ if __name__ == '__main__':
             sureler = []
             for f in ImageSequence.Iterator(img):
                 kare = _logo_kenar_arka_planini_temizle(f.copy())
-                kareler.append(ctk.CTkImage(light_image=kare, dark_image=kare, size=(220, 220)))
+                kareler.append(ctk.CTkImage(light_image=kare, dark_image=kare, size=(172, 172)))
                 sureler.append(f.info.get("duration", img.info.get("duration", 45)))
             if kareler:
                 oynatici(kareler, sureler)
@@ -13294,10 +15551,18 @@ if __name__ == '__main__':
     )
     lbl_welcome.pack(pady=10)
 
+    hero_kicker = ctk.CTkLabel(
+        hero_content,
+        text="NETOPS  /  OPERATÖR KONSOLU",
+        text_color=aktif_palet["text_dim"],
+        font=("Segoe UI Semibold", 10),
+    )
+    hero_kicker.pack(pady=(0, 2))
+
     hero_status_frame = ctk.CTkFrame(
         hero_content,
         fg_color=aktif_palet["card"],
-        corner_radius=15,
+        corner_radius=FLUENT_RADII["card"],
         border_width=1,
         border_color=aktif_palet["entry_border"],
     )
@@ -13452,7 +15717,26 @@ if __name__ == '__main__':
     now_playing_widget_kaydet("home_np_settings", home_now_playing_settings, "secondary")
     now_playing_widget_kaydet("home_np_open", home_now_playing_open, "primary")
 
-    animasyonlu_yazi(T("main_hello"))
+    # Keep the original NetOps chat surface as the initial screen. The
+    # dashboard remains available through its existing navigation hooks, but
+    # it must not replace the conversation UI during startup.
+    home_dashboard_surface = None
+
+    def show_home_dashboard():
+        """Show the existing conversation surface without losing its history."""
+        try:
+            chat_bubble_shell.pack_forget()
+        except Exception:
+            pass
+        try:
+            if hero_content.winfo_manager() != "pack":
+                hero_content.pack(expand=True, fill="both")
+        except Exception:
+            pass
+        return True
+
+    globals()["home_dashboard_surface"] = home_dashboard_surface
+    globals()["show_home_dashboard"] = show_home_dashboard
 
     # ------------------------------------------------------------
     # HAFİF ARAYÜZ HAREKETLERİ v14.6
@@ -13732,14 +16016,51 @@ if __name__ == '__main__':
         _neto_input_bar_konumla()
 
     def _neto_input_bar_konumla():
-        # Pack owns the width. No nested event processing during transitions.
+        # Agent workspace uses the same composer, but it must float above the
+        # workspace surface instead of being hidden with the normal chat tree.
+        # Keep this decision here so resize/theme callbacks cannot undo it.
+        agent_surface = globals().get("_neto_workspace_state", {}).get("surface")
+        try:
+            agent_surface_visible = (
+                bool(globals().get("_NETO_AGENT_MODU", False))
+                and agent_surface is not None
+                and agent_surface.winfo_exists()
+            )
+        except Exception:
+            agent_surface_visible = False
+        if agent_surface_visible:
+            try:
+                if input_container.winfo_manager() == "pack":
+                    input_container.pack_forget()
+                input_container.configure(height=48)
+                input_container.place(
+                    relx=0.5,
+                    rely=1.0,
+                    relwidth=0.92,
+                    anchor="sw",
+                    x=0,
+                    y=-10,
+                )
+                input_container.lift()
+                giris_frame = globals().get("giris_frame")
+                if giris_frame is not None and giris_frame.winfo_exists():
+                    giris_frame.configure(height=48)
+                return
+            except Exception:
+                pass
+
+        # Normal chat layout: pack owns the width. No nested event processing
+        # during transitions.
         if input_container.winfo_manager() == "place":
             input_container.place_forget()
         if input_container.winfo_manager() != "pack":
             input_container.configure(height=52)
             input_container.pack(side="bottom", fill="x", expand=False,
-                                 padx=24, pady=(0, 10), anchor="s", before=chat_container)
+                                 padx=24, pady=(0, 10), anchor="s")
 
+    # A few workspace and responsive callbacks run outside this closure. Make
+    # the canonical layout function available to those callbacks as well.
+    globals()["_neto_input_bar_konumla"] = _neto_input_bar_konumla
     _neto_input_bar_konumla()
 
     ekli_resim_frame = ctk.CTkFrame(
@@ -13780,23 +16101,23 @@ if __name__ == '__main__':
     )
     btn_resim_kaldir.pack(side="right", padx=10, pady=8)
 
-    _INPUT_BAR_HEIGHT = 50
+    _INPUT_BAR_HEIGHT = 48
     _INPUT_BUTTON_SIZE = 30
     _INPUT_ICON_SIZE = 22
-    _INPUT_BAR_BG = "#07080D"
-    _INPUT_BAR_BORDER = "#242A38"
-    _INPUT_TEXT = "#F2F5FF"
-    _INPUT_PLACEHOLDER = "#8D96A8"
-    _INPUT_ICON_COLOR = "#F2F5FF"
-    _INPUT_AI_COLOR = "#BF8CFF"
-    _INPUT_HOVER = "#1C2433"
+    _INPUT_BAR_BG = aktif_palet["card"]
+    _INPUT_BAR_BORDER = aktif_palet["entry_border"]
+    _INPUT_TEXT = aktif_palet["text_main"]
+    _INPUT_PLACEHOLDER = aktif_palet["text_dim"]
+    _INPUT_ICON_COLOR = aktif_palet["text_main"]
+    _INPUT_AI_COLOR = aktif_palet["neon"]
+    _INPUT_HOVER = aktif_palet["button_hover"]
 
     giris_frame = ctk.CTkFrame(
         input_container,
         fg_color=_INPUT_BAR_BG,
-        corner_radius=25,
+        corner_radius=FLUENT_RADII["card"],
         height=_INPUT_BAR_HEIGHT,
-        border_width=0,
+        border_width=1,
         border_color=_INPUT_BAR_BORDER
     )
     giris_frame.pack(fill="x", ipady=0, pady=2)
@@ -13925,10 +16246,15 @@ if __name__ == '__main__':
         if not inline_live_state.get("active"):
             return
         try:
-            giris_frame.configure(fg_color=_INPUT_BAR_BG, border_color=_INPUT_BAR_BORDER, border_width=0, corner_radius=25)
+            giris_frame.configure(
+                fg_color=_INPUT_BAR_BG,
+                border_color=_INPUT_BAR_BORDER,
+                border_width=1,
+                corner_radius=FLUENT_RADII["card"],
+            )
             giris.configure(
                 fg_color="transparent", text_color=_INPUT_TEXT,
-                border_color=_INPUT_BAR_BORDER, border_width=0,
+                border_color=_INPUT_BAR_BORDER, border_width=1,
             )
             btn_live.configure(
                 fg_color="transparent", text_color="#EAF0FF", hover_color=_INPUT_HOVER,
@@ -13998,7 +16324,7 @@ if __name__ == '__main__':
                 fg_color=_INPUT_BAR_BG,
                 border_color=_INPUT_BAR_BORDER,
                 border_width=0,
-                corner_radius=25
+                corner_radius=FLUENT_RADII["card"]
             )
         except Exception:
             pass
@@ -14220,8 +16546,8 @@ if __name__ == '__main__':
                 giris_frame.configure(
                     fg_color=_INPUT_BAR_BG,
                     border_color=_INPUT_BAR_BORDER,
-                    border_width=0,
-                    corner_radius=25,
+                    border_width=1,
+                    corner_radius=FLUENT_RADII["card"],
                     height=_INPUT_BAR_HEIGHT,
                 )
             except Exception:
@@ -14566,6 +16892,8 @@ if __name__ == '__main__':
         "input_focus_job": None,
         "intro_ran": False,
         "jelly_ran": False,
+        "hover_bind_job": None,
+        "hover_bound": False,
     }
 
     def _neto_widget_var(widget):
@@ -14661,8 +16989,23 @@ if __name__ == '__main__':
     globals()["_neto_bind_hover_tree"] = _neto_bind_hover_tree
 
     def _neto_sidebar_stagger():
-        # Preserve padding and dimensions chosen by the responsive layout.
-        _neto_bind_hover_tree(side_panel)
+        # Bind after the first paint. This keeps startup rendering responsive
+        # and avoids walking the sidebar tree during the intro frame.
+        state = _neto_motion_v147
+        if state.get("hover_bound") or state.get("hover_bind_job"):
+            return
+
+        def bind_after_paint():
+            state["hover_bind_job"] = None
+            if not _neto_widget_var(side_panel):
+                return
+            _neto_bind_hover_tree(side_panel)
+            state["hover_bound"] = True
+
+        try:
+            state["hover_bind_job"] = root.after_idle(bind_after_paint)
+        except Exception:
+            bind_after_paint()
     def _neto_settings_bar_slide():
         try:
             bar_width = _settings_bottom_bar_width()
@@ -14682,17 +17025,19 @@ if __name__ == '__main__':
             if not _neto_widget_var(settings_bottom_bar):
                 return
             try:
-                settings_bottom_bar.place_configure(x=int(x), width=_settings_bottom_bar_width())
+                # Keep the width fixed during the transition so Tk does not
+                # repeat geometry calculations on every frame.
+                settings_bottom_bar.place_configure(x=int(x))
             except Exception:
                 pass
-        engine.number("settings-bar-slide", start_x, end_x, update, duration_ms=240, easing="ease_out_quart")
+        engine.number("settings-bar-slide", start_x, end_x, update, duration_ms=220, easing="ease_out_quart")
 
     def _neto_jelly_intro_baslat(force=False):
-        """Reveal the ready main window with one shared, low-cost jelly tween.
+        """Reveal the ready window without resizing it on every animation frame.
 
-        Geometry is changed only when the rounded size actually changes. This
-        keeps the playful settle motion while avoiding the per-frame redraw
-        storm that made the old startup feel shaky on slower machines.
+        Top-level geometry changes force Tk to recalculate the whole window and
+        were the main source of startup jumps. A short alpha settle keeps the
+        sense of arrival while leaving layout, sidebar, and chat content stable.
         """
         state = _neto_motion_v147
         if state.get("jelly_ran") and not force:
@@ -14706,65 +17051,21 @@ if __name__ == '__main__':
                 pass
             return
 
+        start_alpha = 0.84
         try:
-            root.update_idletasks()
-            target_w = max(520, int(root.winfo_width()))
-            target_h = max(644, int(root.winfo_height()))
-            target_x = int(root.winfo_x())
-            target_y = int(root.winfo_y())
-            if str(root.state()).lower() in {"zoomed", "iconic"}:
-                target_w = target_h = 0
-        except Exception:
-            target_w, target_h, target_x, target_y = 0, 0, 0, 0
-
-        can_resize = target_w > 0 and target_h > 0
-        start_scale = 0.965
-        last_size = {"value": (0, 0, 0, 0)}
-
-        if can_resize:
-            try:
-                start_w = max(480, round(target_w * start_scale))
-                start_h = max(600, round(target_h * start_scale))
-                start_x = target_x + (target_w - start_w) // 2
-                start_y = target_y + (target_h - start_h) // 2
-                root.geometry(f"{start_w}x{start_h}+{start_x}+{start_y}")
-                last_size["value"] = (start_w, start_h, start_x, start_y)
-            except Exception:
-                can_resize = False
-
-        try:
-            root.attributes("-alpha", 0.72)
+            root.attributes("-alpha", start_alpha)
         except Exception:
             pass
 
         def update(progress):
-            p = max(0.0, min(1.04, float(progress)))
-            if can_resize:
-                scale = start_scale + ((1.0 - start_scale) * p)
-                width = max(480, round(target_w * scale))
-                height = max(600, round(target_h * scale))
-                x = target_x + (target_w - width) // 2
-                y = target_y + (target_h - height) // 2
-                current = (width, height, x, y)
-                if current != last_size["value"]:
-                    try:
-                        root.geometry(f"{width}x{height}+{x}+{y}")
-                        last_size["value"] = current
-                    except Exception:
-                        engine.cancel("neto-jelly-intro")
-                        return
             try:
-                root.attributes("-alpha", min(1.0, 0.72 + (0.28 * min(1.0, p))))
+                p = max(0.0, min(1.0, float(progress)))
+                root.attributes("-alpha", start_alpha + ((1.0 - start_alpha) * p))
             except Exception:
-                pass
+                engine.cancel("neto-jelly-intro")
 
         def finish():
             state["jelly_job"] = None
-            if can_resize:
-                try:
-                    root.geometry(f"{target_w}x{target_h}+{target_x}+{target_y}")
-                except Exception:
-                    pass
             try:
                 root.attributes("-alpha", 1.0)
             except Exception:
@@ -14772,16 +17073,24 @@ if __name__ == '__main__':
 
         state["jelly_job"] = engine.tween(
             "neto-jelly-intro",
-            300,
+            240,
             update,
-            easing="spring_soft",
+            easing="fluid_out",
             on_complete=finish,
         )
 
     def _neto_hero_motion():
+        # The native dashboard is the initial desktop surface. Do not let the
+        # legacy intro animation reopen the chat shell during startup.
+        dashboard = globals().get("home_dashboard_surface")
+        try:
+            if dashboard is not None and dashboard.winfo_exists() and dashboard.winfo_manager() == "pack":
+                return
+        except Exception:
+            pass
         if chat_bubble_shell.winfo_manager():
             _neto_sohbet_ekrani_ac()
-            for widget in (gif_ana_label, lbl_welcome, hero_status_frame):
+            for widget in (gif_ana_label, lbl_welcome, hero_kicker, hero_status_frame):
                 try:
                     widget.pack_forget()
                 except Exception:
@@ -14794,14 +17103,19 @@ if __name__ == '__main__':
             if chat_bubble_shell.winfo_manager():
                 engine.cancel("hero-intro")
                 _neto_sohbet_ekrani_ac()
-                for widget in (gif_ana_label, lbl_welcome, hero_status_frame):
+                for widget in (gif_ana_label, lbl_welcome, hero_kicker, hero_status_frame):
                     try:
                         widget.pack_forget()
                     except Exception:
                         pass
                 return
+            if not _neto_widget_var(lbl_welcome) or not _neto_widget_var(hero_kicker):
+                engine.cancel("hero-intro")
+                return
             lbl_welcome.configure(text_color=_neto_hex_karistir(
                 aktif_palet["text_dim"], aktif_palet["text_main"], progress))
+            hero_kicker.configure(text_color=_neto_hex_karistir(
+                aktif_palet["bg"], aktif_palet["text_dim"], progress))
         _neto_motion_v147["intro_job"] = engine.tween("hero-intro", 200, update)
     def _neto_iddiali_intro_baslat(force=False):
         if _neto_motion_v147.get("intro_ran") and not force:
@@ -14873,6 +17187,8 @@ if __name__ == '__main__':
 
     def hamburger_panel_ac():
         try:
+            if getattr(side_panel, "_neto_legacy_hidden", False):
+                return "break"
             _menu_log("panel açılıyor")
 
             if side_panel.winfo_manager() == "pack":
@@ -14887,7 +17203,7 @@ if __name__ == '__main__':
 
             _hamburger_konumla()
             hamburger_btn.lift()
-            hamburger_btn.configure(text="×")
+            sidebar_state["overlay"] = True
             # Neto Experience 3.0: metin sembolu yerine gercek ikon.
             try:
                 import neto_experience3 as _nx3_hb
@@ -14903,6 +17219,8 @@ if __name__ == '__main__':
 
     def hamburger_panel_kapat():
         try:
+            if getattr(side_panel, "_neto_legacy_hidden", False):
+                return "break"
             _menu_log("panel kapanıyor")
 
             if side_panel.winfo_manager() == "place":
@@ -14916,11 +17234,11 @@ if __name__ == '__main__':
             except Exception:
                 pass
 
-            _sidebar_layout_uygula(not sidebar_state.get("compact", False), animate=False, persist=False)
+            sidebar_state["overlay"] = False
+            _sidebar_layout_uygula(False, animate=False, persist=False)
 
             _hamburger_konumla()
             hamburger_btn.lift()
-            hamburger_btn.configure(text="☰")
             # Neto Experience 3.0: metin sembolu yerine gercek ikon.
             try:
                 import neto_experience3 as _nx3_hb2
@@ -14976,6 +17294,46 @@ if __name__ == '__main__':
             w = root.winfo_width()
             agent_modu = globals().get("_NETO_AGENT_MODU", False)
             sidebar_animating = bool(sidebar_state.get("animating"))
+            workspace_rail = globals().get("context_panel")
+
+            # Görsel 1 düzenindeki orta çalışma rail'i dar pencerede ana
+            # sohbeti sıkıştırmasın; genişlik geri geldiğinde aynı konuma döner.
+            if workspace_rail is not None and workspace_rail.winfo_exists() and not globals().get("unified_sidebar"):
+                if w < 900:
+                    if workspace_rail.winfo_manager() == "pack":
+                        workspace_rail.pack_forget()
+                elif not agent_modu and workspace_rail.winfo_manager() != "pack":
+                    workspace_rail.pack(side="left", fill="y", before=main_c)
+
+            unified = globals().get("unified_sidebar")
+            if unified is not None and unified.winfo_exists():
+                _neto_legacy_sidebar_hide()
+                if w < 760:
+                    if unified.winfo_manager() == "pack":
+                        unified.pack_forget()
+                elif unified.winfo_manager() != "pack":
+                    unified.pack(side="left", fill="y", before=main_c)
+                if w < 760:
+                    try:
+                        _neto_input_bar_konumla()
+                        _input_container_genislik_uygula()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        _neto_input_bar_konumla()
+                        _input_container_genislik_uygula()
+                    except Exception:
+                        pass
+                try:
+                    lbl_welcome.configure(font=("Segoe UI Semibold", 23 if w < 760 else 26))
+                    etiket.configure(
+                        wraplength=max(280, w - 80) if w < 760 else 500,
+                        font=("Segoe UI", 13 if w < 760 else 14, "italic"),
+                    )
+                except Exception:
+                    pass
+                return
 
             if w < MINI_LIMIT:
                 # Compact modda sidebar dar bir ikon rail olarak görünür kalır;
@@ -14985,7 +17343,7 @@ if __name__ == '__main__':
                 except Exception:
                     btn_text = "☰"
 
-                if side_panel.winfo_manager() == "place" and btn_text == "×":
+                if side_panel.winfo_manager() == "place" and sidebar_state.get("overlay", False):
                     side_panel.configure(width=PANEL_WIDTH)
                     side_panel.lift()
                     hamburger_btn.lift()
@@ -15066,6 +17424,10 @@ if __name__ == '__main__':
             _resize_job = root.after(70, mini_ekran_uygula)
         except Exception:
             _resize_job = None
+        try:
+            root.after(80, _neto_sohbet_sarma_guncelle)
+        except Exception:
+            pass
 
     root.bind("<Configure>", on_window_resize)
     root.after(300, mini_ekran_uygula)
@@ -15095,11 +17457,26 @@ if __name__ == '__main__':
             input_container.pack_forget()
         except Exception:
             pass
+        try:
+            if context_panel.winfo_manager() == "pack":
+                context_panel.pack_forget()
+        except Exception:
+            pass
+        try:
+            if unified_sidebar.winfo_manager() == "pack":
+                unified_sidebar.pack_forget()
+        except Exception:
+            pass
 
     def _settings_main_content_restore():
         """Restore the normal app surface after leaving Settings."""
         try:
             chat_container.pack(side="top", expand=True, fill="both", padx=24, pady=(12, 6))
+        except Exception:
+            pass
+        try:
+            if root.winfo_width() >= 760 and not unified_sidebar.winfo_manager():
+                unified_sidebar.pack(side="left", fill="y", before=main_c)
         except Exception:
             pass
 
@@ -15221,6 +17598,8 @@ if __name__ == '__main__':
                     globals().get("live_panel"),
                     globals().get("extension_store_panel"),
                     globals().get("side_panel"),
+                    globals().get("context_panel"),
+                    globals().get("unified_sidebar"),
                     globals().get("main_c"),
                 }
                 try:
@@ -15583,6 +17962,12 @@ if __name__ == '__main__':
     def _settings_sidebar_prepare_hidden():
         """Place the sidebar offscreen while the settings surface is closing."""
         try:
+            # The unified navigation owns the active sidebar. The retired
+            # CPU/RAM rail must never participate in the settings transition;
+            # otherwise the reveal animation places it back over the new menu.
+            if getattr(side_panel, "_neto_legacy_hidden", False):
+                _neto_legacy_sidebar_hide()
+                return None
             if root.winfo_width() < MINI_LIMIT or not side_panel.winfo_exists():
                 return None
             target = PANEL_WIDTH if not sidebar_state.get("compact", False) else sidebar_compact_width
@@ -15603,6 +17988,8 @@ if __name__ == '__main__':
 
     def _settings_sidebar_pack_visible():
         """Return the settings sidebar to the normal desktop pack layout."""
+        if getattr(side_panel, "_neto_legacy_hidden", False):
+            return
         side_panel.place_forget()
         try:
             side_panel.pack(side="left", fill="y", before=main_c)
@@ -15631,6 +18018,9 @@ if __name__ == '__main__':
 
     def _settings_sidebar_reveal(target):
         """Reveal the normal sidebar from the left after settings closes."""
+        if getattr(side_panel, "_neto_legacy_hidden", False):
+            _neto_legacy_sidebar_hide()
+            return
         if not target:
             mini_ekran_uygula()
             return
@@ -16227,13 +18617,44 @@ if __name__ == '__main__':
             globals().get("btn_netoai"), root,
         )
 
+    def neto_agent_runner_uygulama_icinde_ac(initial_task=""):
+        """Yerel Agent Runner'ı sohbet yüzeyinden ayrı bir çalışma alanında aç."""
+        try:
+            from neto_local_agent_runner import create_local_agent_panel
+
+            body = _neto_workspace_create(
+                "NetOps Agent Runner",
+                "Bu cihazda yerel çalışır. Kod yazma ve riskli araçlar görünür onay ister.",
+                globals().get("btn_netoai"),
+            )
+            panel = create_local_agent_panel(
+                body,
+                root=root,
+                workspace=os.path.dirname(os.path.abspath(__file__)),
+                palette=aktif_palet,
+                initial_task=initial_task,
+            )
+            # The normal chat composer remains available as the Agent input.
+            root.after(80, _neto_input_bar_konumla)
+            return panel
+        except Exception as exc:
+            return _neto_workspace_show_fallback(
+                "NetOps Agent Runner",
+                f"Yerel agent çalışma alanı açılamadı.\n\nTeknik ayrıntı: {exc}",
+            )
+
     def _neto_ai_hazirlama_yuzeyi_ac():
         _neto_workspace_create(T("ai_start_title"), T("ai_preparing"), globals().get("btn_netoai"))
         return _NetoEmbeddedToplevel(root)
 
     globals()["neto_ai_chat_uygulama_icinde_ac"] = neto_ai_chat_uygulama_icinde_ac
+    globals()["neto_agent_runner_uygulama_icinde_ac"] = neto_agent_runner_uygulama_icinde_ac
     globals()["_neto_ai_hazirlama_yuzeyi_ac"] = _neto_ai_hazirlama_yuzeyi_ac
     globals()["_neto_workspace_theme_refresh"] = _neto_workspace_theme_refresh
+    globals()["_neto_workspace_close_external"] = _neto_workspace_close
+
+    if globals().get("_NETO_AGENT_MODU", False):
+        root.after(420, _neto_agent_yuzeyi_ac)
 
     # ------------------------------------------------------------
     # ANA UYGULAMA İÇİ KAYDIRMALI EKLENTİ MAĞAZASI
@@ -16329,6 +18750,61 @@ if __name__ == '__main__':
     )
     store_desc_label.pack(fill="x", padx=18, pady=(0, 10))
 
+    def netoplay_nops_ice_aktar():
+        """Import a .nops package and expose its Now Playing controls."""
+        global _netoplay_plugin_installed, eklenti_aktif_mi, _netops_plugin_records
+        if _netops_plugin_manager is None:
+            messagebox.showerror("NetoPlay", "Eklenti yöneticisi kullanılamıyor.")
+            return
+        archive = filedialog.askopenfilename(
+            title="NetoPlay eklentisini seç",
+            filetypes=[("NetOps eklentisi", "*.nops"), ("Tüm dosyalar", "*.*")],
+        )
+        if not archive:
+            return
+        try:
+            plugin = _netops_plugin_manager.stage_nops(archive)
+            _netops_plugin_records = _netops_plugin_manager.plugins
+            from neto_plugin_doctor import NetoPluginDoctor
+
+            doctor_report = NetoPluginDoctor(_netops_plugin_manager.plugin_dir).run()
+            if not doctor_report.ok:
+                problems = "; ".join(
+                    f"{item.get('id')}: {', '.join(item.get('errors') or [])}"
+                    for item in doctor_report.findings[:3]
+                )
+                raise RuntimeError(f"Eklenti doktoru paketi onaylamadı: {problems}")
+            if _netops_plugin_api is not None:
+                activation = _netops_plugin_manager.activate(
+                    plugin.manifest.plugin_id,
+                    _netops_plugin_api,
+                )
+                if not activation.get("ok"):
+                    raise RuntimeError(activation.get("error") or "Eklenti etkinleştirilemedi.")
+            _netoplay_plugin_installed = plugin.manifest.plugin_id == "netoplay"
+            if _netoplay_plugin_installed:
+                eklenti_aktif_mi = True
+                _netoplay_sync_ui()
+                _sidebar_metinleri_yenile()
+                animasyonlu_yazi("NetoPlay eklentisi içe aktarıldı.")
+            else:
+                animasyonlu_yazi(f"{plugin.manifest.name} eklentisi içe aktarıldı.")
+        except Exception as exc:
+            messagebox.showerror("NetoPlay", f"Eklenti içe aktarılamadı:\n{exc}")
+
+    btn_nops_import = ctk.CTkButton(
+        extension_store_panel,
+        text="NetoPlay .nops içe aktar",
+        height=32,
+        corner_radius=9,
+        fg_color=aktif_palet["card"],
+        hover_color=aktif_palet["button_hover"],
+        text_color=aktif_palet["text_main"],
+        font=("Segoe UI Semibold", 11),
+        command=netoplay_nops_ice_aktar,
+    )
+    btn_nops_import.pack(fill="x", padx=16, pady=(0, 10))
+
     store_search = ctk.CTkEntry(
         extension_store_panel,
         placeholder_text=store_text("search"),
@@ -16348,30 +18824,18 @@ if __name__ == '__main__':
     store_apps_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
     _neto_scrollable_frame_renklendir(store_apps_frame, aktif_palet, "sidebar")
 
-    # Mağaza uygulama listesi. Kartlar açılışta tekrar tekrar üretilmez.
+    # Mağaza yalnızca kalıcı, güvenlikten geçmiş NetOps eklentilerini gösterir.
+    _netops_plugin_records = (
+        _netops_plugin_manager.discover() if _netops_plugin_manager is not None else []
+    )
     eklentiler = [
-        (f"{APP_NAME} Browser", "https://www.google.com"),
-        ("YouTube", "https://www.youtube.com"),
-        ("WhatsApp", "https://web.whatsapp.com"),
-        ("X", "https://twitter.com"),
-        ("Instagram", "https://instagram.com"),
-        ("Spotify", "https://open.spotify.com"),
-        ("Twitch", "https://twitch.tv"),
-        ("GitHub", "https://github.com"),
-        ("Google Maps", "https://maps.google.com")
+        (item.manifest.name, f"plugin://{item.manifest.plugin_id}")
+        for item in _netops_plugin_records
+        if item.scan.safe_to_review
     ]
+    eklentiler.sort(key=lambda item: item[0].casefold())
 
-    store_icons = {
-        f"{APP_NAME} Browser": "🌐",
-        "YouTube": "▶️",
-        "WhatsApp": "💬",
-        "X": "𝕏",
-        "Instagram": "📸",
-        "Spotify": "🎵",
-        "Twitch": "📹",
-        "GitHub": "💻",
-        "Google Maps": "🗺️",
-    }
+    store_icons = {name: "▣" for name, _url in eklentiler}
 
     store_app_cards = []
 
@@ -16393,6 +18857,21 @@ if __name__ == '__main__':
         try:
             if not eklenti_aktif_mi:
                 animasyonlu_yazi(store_text("extensions_off"))
+                return
+            if str(url).startswith("plugin://"):
+                plugin_id = str(url).split("//", 1)[1].strip().lower()
+                plugin = next(
+                    (item for item in _netops_plugin_records if item.manifest.plugin_id == plugin_id),
+                    None,
+                )
+                if plugin is None or _netops_plugin_manager is None or _netops_plugin_api is None:
+                    animasyonlu_yazi("Eklenti bulunamadı.")
+                    return
+                result = _netops_plugin_manager.activate(plugin_id, _netops_plugin_api)
+                if result.get("ok"):
+                    animasyonlu_yazi(f"{plugin.manifest.name} hazır ve bağlı.")
+                else:
+                    animasyonlu_yazi(f"{plugin.manifest.name}: {result.get('error', 'Aktivasyon başarısız.')}")
                 return
             neto_browser_ac(url)
         except Exception as e:
@@ -16715,6 +19194,9 @@ if __name__ == '__main__':
 
     def eklenti_magazasi_panel_toggle(event=None):
         try:
+            if not _NETOPS_PLUGIN_SYSTEM_ENABLED:
+                animasyonlu_yazi("Eklenti sistemi daha sonra eklenecek.")
+                return "break"
             if extension_store_state.get("busy"):
                 return "break"
             extension_store_state["busy"] = True
@@ -16740,10 +19222,11 @@ if __name__ == '__main__':
 
     # Uygulama açıldıktan sonra kartları gizli panelde parça parça önceden hazırla.
     # Kullanıcı mağazaya hemen basarsa panel yine beklemeden açılır ve kartlar akıcı yüklenir.
-    try:
-        root.after(3200, _store_build_cards_async)
-    except Exception:
-        pass
+    if _NETOPS_PLUGIN_SYSTEM_ENABLED:
+        try:
+            root.after(3200, _store_build_cards_async)
+        except Exception:
+            pass
 
 
     _neto_theme_widget_cache = {"sidebar": [], "agent_sidebar": []}
@@ -16778,6 +19261,86 @@ if __name__ == '__main__':
             pass
 
         try:
+            context_panel.configure(
+                fg_color=aktif_palet["sidebar"],
+                border_color=aktif_palet["entry_border"],
+            )
+            context_body.configure(
+                fg_color=aktif_palet["sidebar"],
+                scrollbar_button_color=aktif_palet["card"],
+                scrollbar_button_hover_color=aktif_palet["button_hover"],
+            )
+            context_header.configure(fg_color="transparent")
+            context_brand.configure(text_color=aktif_palet["text_main"])
+            context_version.configure(text_color=aktif_palet["text_dim"])
+            context_chat_title.configure(text_color=aktif_palet["text_dim"])
+            context_recent_title.configure(text_color=aktif_palet["text_dim"])
+            context_hint.configure(text_color=aktif_palet["text_dim"])
+            context_settings.configure(
+                fg_color=aktif_palet["card"],
+                hover_color=aktif_palet["button_hover"],
+                text_color=aktif_palet["text_main"],
+            )
+            for button, accent in context_buttons:
+                button.configure(
+                    fg_color=aktif_palet["neon"] if accent else aktif_palet["card"],
+                    hover_color=aktif_palet.get("accent_hover", aktif_palet["button_hover"]),
+                    text_color=_tema_vurgu_metin_rengi() if accent else aktif_palet["text_main"],
+                )
+        except Exception:
+            pass
+
+        try:
+            unified_sidebar.configure(
+                fg_color=aktif_palet["sidebar"],
+                border_color=aktif_palet["entry_border"],
+            )
+            unified_icon_bar.configure(
+                fg_color=_neto_hex_karistir(aktif_palet["sidebar"], "#000000", 0.20)
+            )
+            unified_nav.configure(fg_color=aktif_palet["sidebar"])
+            unified_nav_body.configure(
+                fg_color=aktif_palet["sidebar"],
+                scrollbar_button_color=aktif_palet["card"],
+                scrollbar_button_hover_color=aktif_palet["button_hover"],
+            )
+            unified_icon_logo.configure(text_color=aktif_palet["neon"])
+            unified_nav_logo.configure(text_color=aktif_palet["neon"])
+            unified_nav_brand.configure(text_color=aktif_palet["text_main"])
+            unified_nav_version.configure(text_color=aktif_palet["text_dim"])
+            unified_nav_workspace_title.configure(text_color=aktif_palet["text_dim"])
+            unified_nav_data_title.configure(text_color=aktif_palet["text_dim"])
+            unified_nav_services_title.configure(text_color=aktif_palet["text_dim"])
+            unified_nav_hint.configure(text_color=aktif_palet["text_dim"])
+            unified_metrics_card.configure(
+                fg_color=_neto_hex_karistir(aktif_palet["sidebar"], aktif_palet["card"], 0.55),
+                border_color=aktif_palet["entry_border"],
+            )
+            unified_cpu_label.configure(text_color=aktif_palet["neon"])
+            unified_ram_label.configure(text_color=aktif_palet["neon"])
+            unified_nav_settings.configure(
+                fg_color=aktif_palet.get("card_elevated", aktif_palet["card"]),
+                hover_color=aktif_palet["button_hover"],
+                text_color=aktif_palet["neon"],
+                border_color=aktif_palet.get("card_elevated", aktif_palet["card"]),
+            )
+            for button, active in unified_icon_buttons:
+                button.configure(
+                    fg_color=aktif_palet["neon"] if active else "transparent",
+                    hover_color=aktif_palet.get("accent_hover", aktif_palet["button_hover"]),
+                    text_color=_tema_vurgu_metin_rengi() if active else aktif_palet["text_main"],
+                )
+            for button, active in unified_nav_buttons:
+                button.configure(
+                    fg_color=aktif_palet.get("card_elevated", aktif_palet["card"]) if active else "transparent",
+                    hover_color=aktif_palet["button_hover"],
+                    text_color=aktif_palet["neon"] if active else aktif_palet["text_main"],
+                    border_color=aktif_palet.get("card_elevated", aktif_palet["card"]),
+                )
+        except Exception:
+            pass
+
+        try:
             chat_container.configure(fg_color=aktif_palet["bg"])
         except Exception:
             pass
@@ -16792,8 +19355,8 @@ if __name__ == '__main__':
                 giris_frame.configure(
                     fg_color=_INPUT_BAR_BG,
                     border_color=_INPUT_BAR_BORDER,
-                    border_width=0,
-                    corner_radius=25
+                    border_width=1,
+                    corner_radius=FLUENT_RADII["card"]
                 )
         except Exception:
             pass
@@ -16815,7 +19378,7 @@ if __name__ == '__main__':
                 btn_gonder.configure(
                     fg_color="transparent",
                     hover_color=_INPUT_HOVER,
-                    border_color="#4F6BFF",
+                    border_color=_INPUT_BAR_BORDER,
                     border_width=0,
                     text_color="#EAF0FF",
                     image=_neto_input_icon("send", _INPUT_ICON_SIZE, "#EAF0FF"),
@@ -17222,10 +19785,16 @@ if __name__ == '__main__':
     globals()["_neto_tema_yenile_planla"] = _neto_tema_yenile_planla
 
     # Eski responsive_sidebar_uygula bloğu kaldırıldı; hamburger mini mod ile çakışıyordu.
-    side_panel.pack(side="left", fill="y")
+    # Tek dış sidebar: eski iki panel kullanıcıya görünmez, yerine birleşik
+    # ikon şeridi + çalışma alanı barı çizilir.
+    side_panel.pack_forget()
+    _neto_legacy_sidebar_hide()
+    context_panel.pack_forget()
+    unified_sidebar.pack(side="left", fill="y")
     main_c.pack(side="left", fill="both", expand=True)
     try:
-        _sidebar_layout_uygula(True, animate=False, persist=False)
+        # Görsel 1 düzeni: ikon rayı + metinli çalışma rail'i + ana yüzey.
+        _sidebar_layout_uygula(False, animate=False, persist=False)
     except Exception:
         pass
     # Neto Experience 3.0 (v1.40 eklentisi - YALNIZCA EKLEME):
@@ -17276,25 +19845,12 @@ if __name__ == '__main__':
             return False
 
     globals()["_nx3_ray_uygula"] = _nx3_ray_uygula
+    # Eski sol panel görünümü korunur. Experience 3 ikon rayı yalnızca
+    # kullanıcı açıkça seçtiğinde devreye girmelidir; açılışta zorla daraltma
+    # yapılması metinli panelin kaybolmasına neden oluyordu.
     try:
-        import neto_experience3 as _nx3
-        if _nx3.rail_sidebar_enabled():
-            root.after(900, lambda: _nx3_ray_uygula(0))
-    except Exception as _nx3_rail_kurulum:
-        try:
-            print(f"[EXPERIENCE3_RAIL_SETUP_ERROR] {_nx3_rail_kurulum}", flush=True)
-        except Exception:
-            pass
-    try:
-        # Şimdi Çalıyor algılayıcısı uygulamayla birlikte otomatik başlar.
-        # Eski sürümdeki 2,5 saniye sonra zorla "Yok" yazan satır kaldırıldı.
-        try:
-            root.after(2400, now_playing_safe_start)
-        except Exception as _np_auto_start_error:
-            try:
-                now_playing_log(f"[AUTO_SCHEDULE_ERROR] {_np_auto_start_error}")
-            except Exception:
-                pass
+        # Now Playing is user initiated. Do not probe media or create a polling
+        # loop until the user explicitly opens that surface.
         # Launch gate closes only after the real main interface has completed construction.
         _neto_launch_checkpoint("Açıldı" if str(dil_getir()).lower() == "tr" else "Opened", force=True)
         try:
@@ -17336,29 +19892,52 @@ if __name__ == '__main__':
             except Exception:
                 pass
 
-        try:
-            NETO_LAUNCH_LOADING_WINDOW = run_launch_gate(
-                root=root,
-                get_asset_path=get_asset_path,
-                veri_yukle=veri_yukle,
-                veri_kaydet=veri_kaydet,
-                dil_kaydet=dil_kaydet,
-                on_started=_neto_launch_started,
-            )
-        except Exception as _launch_gate_error:
+        if NETOPS_DIRECT_START:
+            def _neto_direct_start():
+                try:
+                    root.attributes("-alpha", 1.0)
+                    # Map the withdrawn borderless window after mainloop starts.
+                    root.attributes("-topmost", True)
+                    root.state("normal")
+                    root.deiconify()
+                    root.update_idletasks()
+                    root.lift()
+                    root.focus_force()
+                    root.after(900, lambda: root.attributes("-topmost", False))
+                    root.after(45, _neto_titlebar_apply_native_style)
+                    root.after(120, _neto_iddiali_intro_baslat)
+                    root.after(155, _neto_titlebar_intro)
+                except Exception:
+                    pass
+                _neto_launch_started(str(dil_getir() or "tr"))
+
+            root.after(0, _neto_direct_start)
+            NETO_LAUNCH_LOADING_WINDOW = None
+        else:
             try:
-                print(f"[LAUNCH_GATE_ERROR] {_launch_gate_error}", flush=True)
-            except Exception:
-                pass
-            try:
-                root.attributes("-alpha", 1.0)
-                root.state("normal")
-                root.deiconify()
-                root.after(45, _neto_titlebar_apply_native_style)
-                root.after(120, _neto_iddiali_intro_baslat)
-                root.after(155, _neto_titlebar_intro)
-            except Exception:
-                pass
+                NETO_LAUNCH_LOADING_WINDOW = run_launch_gate(
+                    root=root,
+                    get_asset_path=get_asset_path,
+                    veri_yukle=veri_yukle,
+                    veri_kaydet=veri_kaydet,
+                    dil_kaydet=dil_kaydet,
+                    on_started=_neto_launch_started,
+                    startup_status_provider=neto_startup_status_snapshot,
+                )
+            except Exception as _launch_gate_error:
+                try:
+                    print(f"[LAUNCH_GATE_ERROR] {_launch_gate_error}", flush=True)
+                except Exception:
+                    pass
+                try:
+                    root.attributes("-alpha", 1.0)
+                    root.state("normal")
+                    root.deiconify()
+                    root.after(45, _neto_titlebar_apply_native_style)
+                    root.after(120, _neto_iddiali_intro_baslat)
+                    root.after(155, _neto_titlebar_intro)
+                except Exception:
+                    pass
 
         def _neto_start_update_services():
             # Güncelleme modüllerinin importu diskte ağır olabilir; ana Tk thread'inde yapılmaz.
@@ -17385,9 +19964,10 @@ if __name__ == '__main__':
                     except Exception:
                         pass
             threading.Thread(target=_worker, daemon=True).start()
-        # Startup update checks can interrupt the welcome flow and should stay
-        # opt-in so the app opens cleanly before any network work begins.
-        if os.environ.get("NETO_ENABLE_STARTUP_UPDATE_CHECK", "").strip() == "1":
+        # Run the update check after the legacy UI is ready so network work
+        # cannot block the first paint. Set the environment variable to 0 to
+        # opt out for offline development.
+        if _NETOPS_STARTUP_UPDATE_CHECK_ENABLED:
             root.after(4200, _neto_start_update_services)
 
         def _neto_start_component_update_services():
@@ -17404,7 +19984,8 @@ if __name__ == '__main__':
             except Exception as _component_update_error:
                 print(f"[COMPONENT_UPDATE_ERROR] {_component_update_error}", flush=True)
 
-        root.after(5200, _neto_start_component_update_services)
+        if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+            root.after(5200, _neto_start_component_update_services)
 
         def _neto_model_adini_gec_yukle():
             def _worker():
@@ -17414,12 +19995,26 @@ if __name__ == '__main__':
                 except Exception:
                     pass
             threading.Thread(target=_worker, daemon=True).start()
-        root.after(2800, _neto_model_adini_gec_yukle)
+        if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+            root.after(2800, _neto_model_adini_gec_yukle)
         root.after(700, lambda: _neto_bind_hover_tree(app_content))
-        root.after(1200, _netops_tts_isit)
-        root.after(1550, _neto_mini_doctor_baslat)
-        root.after(2200, _neto_arduino_izleyicisini_baslat)
-        root.after(3000, neto_remote_hub_start_safe)
+        root.after(900, now_playing_sidebar_initial_probe)
+        if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+            root.after(1200, _netops_tts_isit)
+            root.after(1550, _neto_mini_doctor_baslat)
+            root.after(2200, _neto_arduino_izleyicisini_baslat)
+        # The paired-device bridge is independent from optional watchers.
+        # Start it when remote control is enabled, then quietly recover if a
+        # network adapter or an old socket closes the service later.
+        def _neto_remote_hub_watchdog_schedule():
+            try:
+                if root.winfo_exists():
+                    neto_remote_hub_watchdog()
+                    root.after(5000, _neto_remote_hub_watchdog_schedule)
+            except Exception:
+                pass
+
+        root.after(3000, _neto_remote_hub_watchdog_schedule)
 
         def _neto_experience3_uygula(asama="ilk"):
             # Neto Experience 3.0 katmani (v1.40 eklentisi - YALNIZCA EKLEME).
@@ -17458,11 +20053,11 @@ if __name__ == '__main__':
         root.after(4300, lambda: _neto_experience3_uygula("ilk"))
         # Ikinci gecis: geç olusturulan panelleri de yakalar (idempotent).
         root.after(9500, lambda: _neto_experience3_uygula("gec"))
-        if NETO_WAKE_LAUNCH:
+        if NETO_WAKE_LAUNCH and _NETOPS_BACKGROUND_SERVICES_ENABLED:
             root.after(3200, telefondan_tetikle)
 
         try:
-            if veri_yukle().get("start_live_mode_on_launch"):
+            if _NETOPS_BACKGROUND_SERVICES_ENABLED and veri_yukle().get("start_live_mode_on_launch"):
                 root.after(1800, inline_live_start)
         except Exception:
             pass
@@ -17514,15 +20109,24 @@ if __name__ == '__main__':
                                 root.after(0, lambda: animasyonlu_yazi("📱 Android crash yakalandı; kırmızı log açıldı."))
                         except Exception:
                             pass
-                    neto_android_device.start_android_crash_watch(_neto_android_crash_alert, interval=8)
+                    if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+                        neto_android_device.start_android_crash_watch(_neto_android_crash_alert, interval=8)
+                    def _neto_android_usb_status(message):
+                        try:
+                            root.after(0, lambda: animasyonlu_yazi("Android: " + str(message)))
+                        except Exception:
+                            pass
+                    neto_android_device.start_android_usb_autoconnect(_neto_android_usb_status, interval=4)
                 except Exception as _android_watch_error:
                     try:
                         print("[ANDROID_CRASH_WATCH_ERROR]", _android_watch_error, flush=True)
                     except Exception:
                         pass
             threading.Thread(target=_load_and_start, daemon=True).start()
+        # USB reconnect is a user-requested device feature, so it remains
+        # active even when optional background services are disabled.
         root.after(5200, _neto_android_watch_deferred)
-        if globals().get("VPN_KORUMA_AKTIF", True):
+        if _NETOPS_BACKGROUND_SERVICES_ENABLED and globals().get("VPN_KORUMA_AKTIF", True):
             try:
                 root.after(6400, _neto_vpn_izleyicisini_baslat)
             except Exception:
@@ -17532,8 +20136,32 @@ if __name__ == '__main__':
             print(f"[BOOT] Startup fix active: {NETO_STARTUP_FIX_VERSION}", flush=True)
         except Exception:
             pass
+        # Owner/admin-only emergency console. The trigger is not rendered in
+        # the normal UI; Windows identity and existing NetOps permissions still
+        # gate every operation inside the panel.
+        try:
+            from neto_emergency_console import install as _neto_emergency_install
+            _emergency_permissions = None
+            try:
+                from neto_runtime_core import get_runtime as _neto_get_runtime_for_emergency
+
+                _emergency_permissions = _neto_get_runtime_for_emergency().permissions
+            except Exception:
+                pass
+            _neto_emergency_install(
+                root,
+                os.path.dirname(os.path.abspath(__file__)),
+                palette=aktif_palet,
+                permission_manager=_emergency_permissions,
+            )
+        except Exception as _emergency_console_error:
+            try:
+                print(f"[EMERGENCY_CONSOLE] {_emergency_console_error}", flush=True)
+            except Exception:
+                pass
         crash_guard.boot("mainloop öncesi")
-        _neto_reminder_service_start()
+        if _NETOPS_BACKGROUND_SERVICES_ENABLED:
+            _neto_reminder_service_start()
         try:
             if _NETO_TRAY_AKTIF:
                 _neto_tray_baslat(

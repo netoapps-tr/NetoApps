@@ -81,8 +81,9 @@ class OpenMeteoForecastProvider:
             data = http.get_json(
                 "https://api.open-meteo.com/v1/forecast",
                 params,
-                timeout=10,
+                timeout=4,
                 ttl_seconds=600,
+                retries=0,
             )
             return ProviderResult(self.name, True, data=data)
         except Exception as exc:

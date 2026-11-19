@@ -62,6 +62,19 @@ def health_snapshot(project: str | Path | None = None) -> dict[str, Any]:
         except Exception:
             histories[component] = []
 
+    try:
+        from neto_ui_guard_agent import NetOpsUIGuardAgent
+        from neto_animation_agent import NetOpsAnimationAgent
+        from neto_error_detection_agent import NetOpsErrorDetectionAgent
+
+        ui_guard = NetOpsUIGuardAgent(base).run().as_dict()
+        animation_agent = NetOpsAnimationAgent().validate_engine(base)
+        error_agent = NetOpsErrorDetectionAgent(base).run().as_dict()
+    except Exception as exc:
+        ui_guard = {"ok": False, "error_count": 1, "errors": [str(exc)]}
+        animation_agent = {"ok": False, "errors": [str(exc)]}
+        error_agent = {"ok": False, "error_count": 1, "critical_count": 1, "findings": [str(exc)]}
+
     return {
         "release": {
             "name": RELEASE_NAME,
@@ -81,6 +94,9 @@ def health_snapshot(project: str | Path | None = None) -> dict[str, Any]:
             "message": str(doctor.get("message") or ""),
             "issues": list(doctor.get("issues") or [])[:3],
         },
+        "ui_guard": ui_guard,
+        "animation_agent": animation_agent,
+        "error_detection_agent": error_agent,
         "drivers": [
             _driver_health("neto_visual_driver", "visual_driver"),
             _driver_health("neto_now_playing_driver", "now_playing_driver"),

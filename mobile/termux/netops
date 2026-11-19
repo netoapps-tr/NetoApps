@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+exec python "$PREFIX/lib/netops-shell/netops_shell.py" "$@"

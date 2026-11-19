@@ -7,6 +7,7 @@ used.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -25,6 +26,8 @@ _FORBIDDEN = (
 )
 _WATCH_RUNNING = False
 _WATCH_SEEN: set[str] = set()
+_USB_AUTOCONNECT_RUNNING = False
+_USB_AUTOCONNECT_SEEN: set[str] = set()
 _ANDROID_DEVICE_WINDOW = None
 _LAST_ANDROID_DEVICE_AUTO_OPEN = 0.0
 _ANDROID_DEVICE_AUTO_OPEN_COOLDOWN = 45.0
@@ -47,6 +50,50 @@ _APP_PACKAGES = {
 
 _NETOPS_AGENT_PACKAGE = "com.example.neto_flutter"
 _NETOPS_AGENT_ACTIVITY = "com.example.neto_flutter/.MainActivity"
+_TERMUX_PACKAGE = "com.termux"
+_TERMUX_ACTIVITY = "com.termux/.app.TermuxActivity"
+_TERMUX_SCRIPT_ON_DEVICE = "/sdcard/netops_shell.py"
+_TERMUX_REGISTRY_NAME = "android_usb_devices.json"
+
+
+def build_termux_install_command() -> str:
+    """Return the offline installer command typed into a Termux session."""
+    return "python /sdcard/netops_shell.py install"
+
+
+def _safe_termux_name(value: Any) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "", str(value or ""))
+    return re.sub(r"\s+", " ", cleaned).strip()[:80] or "Android-Cihazi"
+
+
+def build_termux_pair_command(host: str, pairing_code: str, device_name: str) -> str:
+    """Build the one-time pairing command without shell metacharacters."""
+    safe_host = re.sub(r"[^A-Za-z0-9_.:\[\]-]+", "", str(host or "").strip())
+    safe_code = re.sub(r"[^0-9]+", "", str(pairing_code or ""))
+    return f"netops pair --host {safe_host} --code {safe_code} --name {_safe_termux_name(device_name)}"
+
+
+def build_termux_agent_command(device_name: str = "", *, background: bool = False) -> str:
+    name = _safe_termux_name(device_name)
+    command = "netops agent --background" if background else "netops agent"
+    return f"{command} --name {name}" if str(device_name or "").strip() else command
+
+
+def encode_adb_input_text(value: Any) -> str:
+    """Encode a safe command for Android's `input text` space protocol."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.:/@+=,\- ]+", " ", str(value or ""))
+    return cleaned.replace("%", "%25").replace(" ", "%s")
+
+
+def unregistered_authorized_usb_devices(devices: List[Dict[str, Any]], registry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    known = {str(key) for key in (registry or {}).keys()}
+    return [
+        item
+        for item in (devices or [])
+        if str(item.get("state") or "").casefold() == "device"
+        and str(item.get("usb_only", "True")).casefold() == "true"
+        and str(item.get("serial") or "") not in known
+    ]
 
 
 def local_app_dir() -> Path:
@@ -54,6 +101,53 @@ def local_app_dir() -> Path:
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "NetoAssistant"
     return Path.home() / ".neto_assistant"
+
+
+def usb_registry_path() -> Path:
+    path = local_app_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    return path / _TERMUX_REGISTRY_NAME
+
+
+def load_usb_registry(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
+    target = Path(path or usb_registry_path())
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(serial): dict(record)
+        for serial, record in data.items()
+        if isinstance(record, dict) and str(serial).strip()
+    }
+
+
+def save_usb_registry(registry: Dict[str, Dict[str, Any]], path: Optional[Path] = None) -> Path:
+    target = Path(path or usb_registry_path())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(registry or {}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, target)
+    return target
+
+
+def remember_usb_device(serial: str, name: str, *, path: Optional[Path] = None) -> Dict[str, Any]:
+    key = str(serial or "").strip()
+    if not key:
+        return {"ok": False, "error": "USB cihaz seri numarası boş."}
+    registry = load_usb_registry(path)
+    registry[key] = {
+        "name": _safe_termux_name(name),
+        "auto_connect": True,
+        "registered_at": time.time(),
+    }
+    save_usb_registry(registry, path)
+    return {"ok": True, "serial": key, "device": registry[key]}
 
 
 def report_dir() -> Path:
@@ -147,6 +241,109 @@ def adb_device(serial: str, args: List[str], timeout: int = 12, binary: bool = F
 
 def adb_shell(serial: str, command: str, timeout: int = 12) -> Dict[str, Any]:
     return adb_device(serial, ["shell", command], timeout=timeout)
+
+
+def _termux_type_command(serial: str, command: str) -> Dict[str, Any]:
+    encoded = encode_adb_input_text(command)
+    typed = adb_shell(serial, f"input text {encoded}", timeout=8)
+    if not typed.get("ok"):
+        return typed
+    return adb_shell(serial, "input keyevent 66", timeout=8)
+
+
+def _start_termux(serial: str) -> Dict[str, Any]:
+    package = adb_shell(serial, f"monkey -p {_TERMUX_PACKAGE} 1", timeout=12)
+    if package.get("ok"):
+        time.sleep(0.8)
+    return package
+
+
+def install_termux_shell(serial: str) -> Dict[str, Any]:
+    """Push and install the dependency-free `netops` command in Termux."""
+    serial = str(serial or "").strip()
+    if not serial:
+        return {"ok": False, "error": "USB cihaz seçilmedi."}
+    termux = adb_shell(serial, f"pm path {_TERMUX_PACKAGE}", timeout=8)
+    if not termux.get("ok") or "package:" not in str(termux.get("stdout") or ""):
+        return {"ok": False, "error": "Termux kurulu değil; NetOps komutu yüklenemedi."}
+    source = Path(__file__).resolve().parent / "mobile" / "termux" / "netops_shell.py"
+    if not source.is_file():
+        return {"ok": False, "error": f"Termux istemci dosyası bulunamadı: {source}"}
+    pushed = adb_device(serial, ["push", str(source), _TERMUX_SCRIPT_ON_DEVICE], timeout=25)
+    if not pushed.get("ok"):
+        return {"ok": False, "error": str(pushed.get("stderr") or "NetOps Termux dosyası telefona gönderilemedi."), "push": pushed}
+    started = _start_termux(serial)
+    if not started.get("ok"):
+        return {"ok": False, "error": "Termux açılamadı; NetOps installer çalıştırılamadı.", "push": pushed, "start": started}
+    installed = _termux_type_command(serial, build_termux_install_command())
+    return {
+        "ok": bool(installed.get("ok")),
+        "message": "Termux ekranına NetOps installer gönderildi.",
+        "push": pushed,
+        "start": started,
+        "install": installed,
+    }
+
+
+def register_termux_device(serial: str, server_url: str, pairing_code: str, device_name: str) -> Dict[str, Any]:
+    """Install, pair and remember one explicitly approved USB device."""
+    serial = str(serial or "").strip()
+    current = list_usb_devices().get("usb_devices") or []
+    authorized = next((item for item in current if item.get("serial") == serial and item.get("state") == "device"), None)
+    if not authorized:
+        return {"ok": False, "error": "Cihaz yetkili değil. USB hata ayıklamayı açıp ADB iznini onayla."}
+    installed = install_termux_shell(serial)
+    if not installed.get("ok"):
+        return installed
+    port = _server_url_port(server_url, fallback=8765)
+    reverse = adb_device(serial, ["reverse", f"tcp:{port}", f"tcp:{port}"], timeout=10)
+    if not reverse.get("ok"):
+        return {"ok": False, "error": "USB bağlantı köprüsü kurulamadı.", "install": installed, "reverse": reverse}
+    name = _safe_termux_name(device_name)
+    pair_command = build_termux_pair_command("127.0.0.1:" + str(port), pairing_code, name)
+    paired = _termux_type_command(serial, pair_command)
+    if not paired.get("ok"):
+        return {"ok": False, "error": "Termux pairing komutu gönderilemedi.", "install": installed, "reverse": reverse, "pair": paired}
+    remembered = remember_usb_device(serial, name)
+    time.sleep(1.2)
+    agent = _termux_type_command(serial, build_termux_agent_command(name, background=True))
+    return {
+        "ok": bool(remembered.get("ok")),
+        "serial": serial,
+        "name": name,
+        "message": f"{name} tanındı; NetOps komutu Termux'a kuruldu ve agent başlatıldı.",
+        "install": installed,
+        "reverse": reverse,
+        "pair": paired,
+        "agent": agent,
+    }
+
+
+def connect_registered_termux_device(serial: str, server_url: str = "ws://127.0.0.1:8765") -> Dict[str, Any]:
+    """Reconnect a previously approved device after USB is plugged in again."""
+    serial = str(serial or "").strip()
+    registry = load_usb_registry()
+    record = registry.get(serial)
+    if not record:
+        return {"ok": False, "error": "Tanınmayan cihaz otomatik bağlanmadı; önce + Cihaz Ekle kullan."}
+    port = _server_url_port(server_url, fallback=8765)
+    reverse = adb_device(serial, ["reverse", f"tcp:{port}", f"tcp:{port}"], timeout=10)
+    if not reverse.get("ok"):
+        return {"ok": False, "error": "USB bağlantı köprüsü kurulamadı.", "reverse": reverse}
+    stopped = adb_shell(serial, f"am force-stop {_TERMUX_PACKAGE}", timeout=8)
+    started = _start_termux(serial)
+    if not started.get("ok"):
+        return {"ok": False, "error": "Termux açılamadı.", "reverse": reverse, "start": started}
+    agent = _termux_type_command(serial, build_termux_agent_command(record.get("name", ""), background=True))
+    return {
+        "ok": bool(agent.get("ok")),
+        "serial": serial,
+        "name": _safe_termux_name(record.get("name")),
+        "message": f"{_safe_termux_name(record.get('name'))} USB üzerinden yeniden bağlandı.",
+        "reverse": reverse,
+        "stop": stopped,
+        "agent": agent,
+    }
 
 
 def _server_url_port(server_url: str, fallback: int = 8765) -> int:
@@ -474,6 +671,52 @@ def stop_android_crash_watch() -> Dict[str, Any]:
     global _WATCH_RUNNING
     _WATCH_RUNNING = False
     return {"ok": True, "message": "Android crash watcher stopped."}
+
+
+def start_android_usb_autoconnect(on_status=None, interval: int = 4) -> Dict[str, Any]:
+    """Reconnect only USB devices explicitly approved from the + button."""
+    global _USB_AUTOCONNECT_RUNNING, _USB_AUTOCONNECT_SEEN
+    if _USB_AUTOCONNECT_RUNNING:
+        return {"ok": True, "message": "USB NetOps otomatik bağlantısı zaten çalışıyor."}
+    if not adb_available():
+        return {"ok": False, "message": "ADB bulunamadığı için USB otomatik bağlantısı başlatılmadı."}
+    _USB_AUTOCONNECT_RUNNING = True
+    _USB_AUTOCONNECT_SEEN = set()
+
+    def worker() -> None:
+        global _USB_AUTOCONNECT_RUNNING, _USB_AUTOCONNECT_SEEN
+        while _USB_AUTOCONNECT_RUNNING:
+            try:
+                listed = list_usb_devices()
+                authorized = [
+                    item
+                    for item in (listed.get("usb_devices") or [])
+                    if item.get("state") == "device"
+                ]
+                current = {str(item.get("serial") or "") for item in authorized}
+                registry = load_usb_registry()
+                for item in authorized:
+                    serial = str(item.get("serial") or "")
+                    if not serial or serial in _USB_AUTOCONNECT_SEEN or serial not in registry:
+                        continue
+                    result = connect_registered_termux_device(serial)
+                    _USB_AUTOCONNECT_SEEN.add(serial)
+                    if callable(on_status):
+                        on_status(str(result.get("message") or result.get("error") or "USB cihaz bağlantısı denenemedi."))
+                _USB_AUTOCONNECT_SEEN.intersection_update(current)
+            except Exception as exc:
+                if callable(on_status):
+                    on_status(f"USB otomatik bağlantı hatası: {exc}")
+            time.sleep(max(2, int(interval)))
+
+    threading.Thread(target=worker, name="NetoAndroidUsbAutoconnect", daemon=True).start()
+    return {"ok": True, "message": "USB NetOps otomatik bağlantısı başlatıldı."}
+
+
+def stop_android_usb_autoconnect() -> Dict[str, Any]:
+    global _USB_AUTOCONNECT_RUNNING
+    _USB_AUTOCONNECT_RUNNING = False
+    return {"ok": True, "message": "USB NetOps otomatik bağlantısı durduruldu."}
 
 
 def android_device_doctor_ac(parent=None, T=None, palette=None, say_callback=None, crash_alert_log=None):

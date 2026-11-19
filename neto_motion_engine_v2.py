@@ -18,8 +18,10 @@ except Exception as _visual_driver_error:
 else:
     _visual_driver_error = None
 
-BUILD = "23.0-animation-performance-modes"
-DEFAULT_FRAME_MS = 14
+BUILD = "24.0-animation-performance-modes"
+# Align the fallback policy with the 60 Hz UI frame budget. The scheduler
+# already clamps lower values, so 16 ms avoids needless wake-up attempts.
+DEFAULT_FRAME_MS = 16
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
@@ -184,9 +186,18 @@ class MotionEngine:
 
     def _schedule(self):
         if self._timer is None and self._jobs and not self._in_tick:
-            self._timer = self.root.after(
-                max(16, min(item["frame_ms"] for item in self._jobs.values())), self._tick
-            )
+            try:
+                self._timer = self.root.after(
+                    max(16, min(item["frame_ms"] for item in self._jobs.values())), self._tick
+                )
+            except Exception as exc:
+                # A tab can be destroyed between a transition and its next
+                # frame. Do not leave a stale job or turn that race into a
+                # Tk callback error.
+                self._timer = None
+                self._jobs.clear()
+                self.errors.append(("scheduler", str(exc)))
+                self.errors[:] = self.errors[-20:]
 
     def _tick(self):
         self._timer = None

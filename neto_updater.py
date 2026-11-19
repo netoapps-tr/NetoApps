@@ -14,6 +14,7 @@ import re
 import sys
 import threading
 import time
+import tempfile
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 REPO_OWNER = "netoapps-tr"
-REPO_NAME = "Neto-Asistan-download"
+REPO_NAME = "NetoApps"
 REPO_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
 API_URL = "https://api.github.com"
 RELEASES_URL = f"{REPO_URL}/releases"
@@ -33,7 +34,7 @@ FEED_URL = f"{RELEASES_URL}.atom"
 EXPANDED_ASSETS_URL = f"{REPO_URL}/releases/expanded_assets/{{tag}}"
 NETWORK_TIMEOUT = 18
 CACHE_SECONDS = 15 * 60
-UPDATER_BUILD = "neto-v10.37.0-release"
+UPDATER_BUILD = "neto-v1.42.0-release"
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "result": None}
 _CACHE_LOCK = threading.RLock()
@@ -50,10 +51,44 @@ def _state_path() -> Path:
     return _app_data_dir() / "update_state.json"
 
 
+def _can_write_directory(path: Path) -> bool:
+    """Create and probe a directory without assuming Windows TEMP works."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".netops-write-{os.getpid()}-{threading.get_ident()}"
+        probe.write_bytes(b"ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _update_root() -> Path:
+    """Return a stable writable location for downloads and updater jobs.
+
+    PyInstaller/Windows TEMP can be unavailable because of a policy, a full
+    disk, or a stale locked directory. The updater must not depend on it.
+    """
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    appdata = os.environ.get("APPDATA")
+    candidates = [
+        Path(local_appdata) / "NetOps" / "updates" if local_appdata else None,
+        Path(appdata) / "NetOps" / "updates" if appdata else None,
+        Path.home() / ".neto_assistant" / "updates",
+    ]
+    try:
+        candidates.append(Path(tempfile.gettempdir()) / "NetOps" / "updates")
+    except (OSError, ValueError):
+        pass
+    candidates.append(Path.cwd() / ".neto_updates")
+    for candidate in candidates:
+        if candidate is not None and _can_write_directory(candidate):
+            return candidate
+    raise RuntimeError("Güncelleme için yazılabilir klasör oluşturulamadı.")
+
+
 def _downloads_dir() -> Path:
-    path = _app_data_dir() / "updates"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _update_root()
 
 
 def _early_version_tuple(value: Any) -> Optional[Tuple[int, ...]]:
@@ -102,10 +137,13 @@ def _get_version_from_project() -> str:
     except Exception:
         pass
 
-    valid = [value.lstrip("vV") for value in candidates if _early_version_tuple(value)]
-    if not valid:
-        return "0.0.0"
-    return max(valid, key=lambda value: _early_version_tuple(value) or (0,) * 6)
+    # Prefer the dedicated version module.  The main UI file can contain old
+    # compatibility markers and must not override the current release value.
+    for value in candidates:
+        cleaned = value.lstrip("vV")
+        if _early_version_tuple(cleaned):
+            return cleaned
+    return "0.0.0"
 
 
 CURRENT_VERSION = _get_version_from_project()
@@ -127,10 +165,26 @@ def _version_tuple(value: Any) -> Optional[Tuple[int, ...]]:
         return None
 
 
+def _comparison_version_tuple(value: Any) -> Optional[Tuple[int, ...]]:
+    """Compare legacy 10.x builds with the public 1.x release train.
+
+    Early NetOps builds used ``10.39`` while GitHub releases use ``1.40``.
+    Treating those strings literally made every old installation believe that
+    the newer public release was older.  The display value is left untouched;
+    only ordering is normalized here.
+    """
+    parsed = _version_tuple(value)
+    if not parsed:
+        return None
+    if parsed[0] == 10 and parsed[1] >= 0:
+        return (1, parsed[1], *parsed[2:])
+    return parsed
+
+
 def version_is_newer(remote: Any, current: Any = None) -> bool:
     current = get_current_version() if current is None else current
-    remote_tuple = _version_tuple(remote)
-    current_tuple = _version_tuple(current)
+    remote_tuple = _comparison_version_tuple(remote)
+    current_tuple = _comparison_version_tuple(current)
     return bool(remote_tuple and current_tuple and remote_tuple > current_tuple)
 
 
@@ -405,6 +459,37 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
 
     current = get_current_version()
     state = load_state()
+    # The 1.42 channel is file-level only. If its manifest is unavailable,
+    # report that state instead of silently downloading a full program.
+    try:
+        from neto_system_updater import check_for_updates as check_system_updates
+
+        system_result = check_system_updates(force=force)
+        if system_result.get("manifest_ok"):
+            state["last_check_at"] = int(now)
+            state["last_error"] = ""
+            save_state(state)
+            with _CACHE_LOCK:
+                _CACHE["at"] = now
+                _CACHE["result"] = dict(system_result)
+            return system_result
+        return system_result
+    except Exception as exc:
+        return {
+            "available": False,
+            "update_available": False,
+            "is_available": False,
+            "update_mode": "system_files",
+            "manifest_ok": False,
+            "current_version": current,
+            "latest_version": current,
+            "tag_name": "",
+            "system_files": [],
+            "verified": False,
+            "download_url": "",
+            "error": str(exc),
+            "message": f"Sistem guncellemesi kontrol edilemedi: {exc}",
+        }
     try:
         releases = _fetch_releases()
         candidates = [release for release in releases if include_prerelease or not release.get("prerelease")]
@@ -412,7 +497,7 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
             raise RuntimeError("Seçilen yayın kanalında sürüm bulunamadı.")
 
         def release_key(item: Dict[str, Any]) -> Tuple[int, ...]:
-            return _version_tuple(item.get("latest_version") or item.get("tag_name")) or (0,) * 6
+            return _comparison_version_tuple(item.get("latest_version") or item.get("tag_name")) or (0,) * 6
 
         release = max(candidates, key=release_key)
         try:
@@ -545,52 +630,11 @@ def download_update(
     update = update or check_for_updates(force=True)
     if not isinstance(update, dict):
         raise ValueError("Güncelleme bilgisi geçersiz.")
-    url = str(update.get("download_url") or "")
-    asset_value = update.get("asset")
-    asset: Dict[str, Any] = asset_value if isinstance(asset_value, dict) else {}
-    if not url:
-        raise RuntimeError("İndirilebilir yayın dosyası bulunamadı.")
-    expected_digest = _asset_digest(asset) or _normalize_digest(update.get("asset_digest"))
-    if not expected_digest:
-        raise RuntimeError("Güncelleme paketi SHA-256 ile doğrulanamadı.")
-    filename = _safe_filename(str(asset.get("name") or Path(urllib.parse.urlparse(url).path).name))
-    destination_path = Path(destination) if destination else _downloads_dir()
-    if destination_path.suffix:
-        target = destination_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        destination_path.mkdir(parents=True, exist_ok=True)
-        target = destination_path / filename
-    temporary = target.with_suffix(target.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
-    try:
-        hasher = hashlib.sha256()
-        with urllib.request.urlopen(request, timeout=90) as response, temporary.open("wb") as output:
-            total = int(response.headers.get("Content-Length") or asset.get("size") or 0)
-            done = 0
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
-                hasher.update(chunk)
-                done += len(chunk)
-                if callable(progress_callback):
-                    try:
-                        progress_callback(done, total)
-                    except TypeError:
-                        progress_callback(done / total if total else 0.0)
-        actual_digest = hasher.hexdigest()
-        if actual_digest != expected_digest:
-            raise RuntimeError("İndirilen güncelleme paketi SHA-256 doğrulamasını geçemedi.")
-        os.replace(temporary, target)
-    except Exception:
-        try:
-            temporary.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise
-    return str(target)
+    if update.get("update_mode") == "system_files":
+        from neto_system_updater import download_files
+
+        return download_files(update, progress_callback=progress_callback)
+    raise RuntimeError("1.42 guncelleme kanali yalnizca degisen sistem dosyalarini kabul eder.")
 
 
 def download_release(*args: Any, **kwargs: Any) -> str:
@@ -637,6 +681,14 @@ def mark_post_update_success_from_argv(argv: Optional[List[str]] = None) -> bool
 
 
 def install_update(path: str, **kwargs: Any) -> Dict[str, Any]:
+    try:
+        plan = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(plan, dict) and plan.get("update_mode") == "system_files":
+            from neto_system_updater import install_downloaded
+
+            return install_downloaded(path, restart=bool(kwargs.get("restart", True)))
+    except (OSError, ValueError, UnicodeError, TypeError):
+        pass
     from neto_update_helper import install_update as helper_install
     return helper_install(path, **kwargs)
 

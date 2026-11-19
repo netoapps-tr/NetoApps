@@ -1,0 +1,1 @@
+{"id":"netodiagnostics","name":"NetoDiagnostics","version":"1.0.0","entry":"main.py","description":"Sistem tanısı ve hata raporu.","permissions":["system_status","filesystem_write"]}

@@ -1,0 +1,13 @@
+{
+  "id": "netoplay",
+  "name": "NetoPlay",
+  "version": "1.0.0",
+  "entry": "main.py",
+  "description": "NetOps Now Playing ekranı ve medya durumu adaptörü.",
+  "permissions": [
+    "media_control",
+    "browser_internal",
+    "window_management",
+    "audio_control"
+  ]
+}

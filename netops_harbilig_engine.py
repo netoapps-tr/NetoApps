@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -20,6 +22,11 @@ try:
     from config import KUFUR_LISTESI as _PROFANITY_LIST
 except Exception:  # pragma: no cover
     _PROFANITY_LIST = []
+
+try:
+    from neto_adaptive_intent import AdaptiveIntentModel
+except Exception:  # pragma: no cover - minimal installs still keep chat working
+    AdaptiveIntentModel = None
 
 try:
     import neto_sohbet_v2
@@ -218,10 +225,11 @@ class HarbiligText:
         if any(marker in lowered for marker in blocked):
             return False
         is_recipe = "malzemeler" in lowered and ("hazırlan" in lowered or "yapılış" in lowered or "yapilis" in lowered)
-        list_lines = re.findall(r"(?im)^\s*(?:[-•]|\d+[.)])\s+", clean)
-        if not is_recipe and (len(list_lines) >= 2 or clean.count("•") >= 2):
-            return False
         source = str((item or {}).get("source") or "").casefold()
+        web_sources = {"web_search", "scrapling_search", "duckduckgo_search", "bing_search", "recipe_search"}
+        list_lines = re.findall(r"(?im)^\s*(?:[-•]|\d+[.)])\s+", clean)
+        if not is_recipe and source not in web_sources and (len(list_lines) >= 2 or clean.count("•") >= 2):
+            return False
         if source in {"explicit_user_correction", "local", "quick_chat"}:
             return True
         tokens = cls.core_tokens(query)
@@ -337,6 +345,8 @@ class HarbiligSearchClient:
         rows = self._scrapling_search(query, limit)
         if not rows:
             rows = self._duckduckgo_html(query, limit)
+        if not rows:
+            rows = self._bing_search(query, limit)
         return self._filter(rows, query)[:limit]
 
     def fetch_page_text(self, url: str) -> str:
@@ -393,6 +403,22 @@ class HarbiligSearchClient:
         except Exception:
             return []
 
+    def _bing_search(self, query: str, limit: int) -> list[HarbiligSearchItem]:
+        url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}&setlang=tr"
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                    "Accept-Language": "tr-TR,tr;q=0.9",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                raw = response.read(700_000).decode("utf-8", "ignore")
+            return self._parse_bing_html(raw, limit)
+        except Exception:
+            return []
+
     def _parse_duckduckgo_html(self, html_text: str, limit: int) -> list[HarbiligSearchItem]:
         rows: list[HarbiligSearchItem] = []
         chunks = re.split(r'class=["\'][^"\']*result__a[^"\']*["\']', html_text)
@@ -408,6 +434,41 @@ class HarbiligSearchClient:
                     pass
             title = HarbiligText.clean_inline(re.sub(r"<.*?>", " ", title_match.group(1))) if title_match else ""
             body = HarbiligText.clean_inline(re.sub(r"<.*?>", " ", snippet_match.group(1))) if snippet_match else ""
+            if title or body:
+                rows.append(HarbiligSearchItem(title=title, body=body, url=url))
+        return rows
+
+    def _parse_bing_html(self, html_text: str, limit: int) -> list[HarbiligSearchItem]:
+        rows: list[HarbiligSearchItem] = []
+        chunks = re.split(r'<li[^>]+class=["\'][^"\']*\bb_algo\b[^"\']*["\']', html_text, flags=re.I)
+        for chunk in chunks[1 : limit * 3 + 1]:
+            title_match = re.search(
+                r"<h2[^>]*>\s*<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+                chunk,
+                flags=re.I | re.S,
+            )
+            if not title_match:
+                continue
+            url = html.unescape(title_match.group(1))
+            title = HarbiligText.clean_inline(re.sub(r"<.*?>", " ", title_match.group(2)))
+            snippet_match = re.search(
+                r'<div[^>]+class=["\'][^"\']*\bb_caption\b[^"\']*["\'][^>]*>.*?<p[^>]*>(.*?)</p>',
+                chunk,
+                flags=re.I | re.S,
+            )
+            body = HarbiligText.clean_inline(
+                re.sub(r"<.*?>", " ", snippet_match.group(1)) if snippet_match else ""
+            )
+            if url.startswith("https://www.bing.com/ck/"):
+                encoded = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("u", [""])[0]
+                if encoded.startswith("a1"):
+                    try:
+                        padded = encoded[2:] + "=" * (-len(encoded[2:]) % 4)
+                        decoded = base64.urlsafe_b64decode(padded).decode("utf-8", "ignore")
+                        if decoded.startswith(("http://", "https://")):
+                            url = decoded
+                    except (ValueError, UnicodeDecodeError):
+                        pass
             if title or body:
                 rows.append(HarbiligSearchItem(title=title, body=body, url=url))
         return rows
@@ -477,10 +538,18 @@ class NetOpsHarbiligEngine:
         self.search_client = HarbiligSearchClient()
         self._turns: deque[dict[str, str]] = deque(maxlen=6)
         self._last_media: dict[str, str] = {}
+        self.adaptive_model = AdaptiveIntentModel() if AdaptiveIntentModel is not None else None
+        # Chat, live voice and the embedded agent can ask concurrently. Keep
+        # the shared turn context and memory writes in one deterministic order.
+        self._answer_lock = threading.RLock()
         self._restore_recent_turns(self.ensure_memory())
         self.ensure_word_core()
 
     def answer(self, message: Any, *, agent_mode: bool = False) -> HarbiligResult:
+        with self._answer_lock:
+            return self._answer_locked(message, agent_mode=agent_mode)
+
+    def _answer_locked(self, message: Any, *, agent_mode: bool = False) -> HarbiligResult:
         raw = str(message or "").strip()
         normalized = self.normalize(raw)
         if not normalized:
@@ -580,6 +649,15 @@ class NetOpsHarbiligEngine:
                     return HarbiligText.clean_inline(result)
             except Exception:
                 pass
+        # The learner only handles high-confidence casual language. If it is
+        # unsure, the normal memory and web-search flow remains unchanged.
+        if self.adaptive_model is not None:
+            try:
+                prediction = self.adaptive_model.predict(message)
+                if prediction and prediction.label == "quick_chat":
+                    return "Buradayım. Bunu konuşabiliriz; ne yapmak istediğini biraz açar mısın?"
+            except Exception:
+                pass
         return None
 
     def search_web(self, message: str, location: Any = None, dynamic_context: str = "", query_override: str = "") -> HarbiligResult:
@@ -591,8 +669,12 @@ class NetOpsHarbiligEngine:
             return self.fallback_result(query)
         enriched_items: list[HarbiligSearchItem] = []
         for item in items[: self.max_sources]:
-            page_text = self.search_client.fetch_page_text(item.url) if item.url else ""
-            body = page_text[:2200] if page_text else item.body
+            # Search snippets are already scoped to the query. Full-page text
+            # can begin with navigation, bot fallbacks, or unrelated widgets;
+            # only fetch it when the provider returned no usable snippet.
+            body = HarbiligText.clean_answer(item.body or "")
+            if not body and item.url:
+                body = self.search_client.fetch_page_text(item.url)[:2200]
             enriched_items.append(HarbiligSearchItem(item.title, body, item.url))
         text = HarbiligText.compose_search_answer(query, enriched_items, dynamic_context)
         if not text:
@@ -920,6 +1002,15 @@ class NetOpsHarbiligEngine:
         }
         self._turns.append(turn)
         self._persist_recent_turns()
+        if self.adaptive_model is not None and intent in {
+            "quick_chat", "command", "music_play", "recipe", "web_search",
+            "automation_draft",
+        }:
+            try:
+                # The model stores counters/features only, never raw text.
+                self.adaptive_model.observe(raw, intent)
+            except Exception:
+                pass
 
     def _restore_recent_turns(self, data: dict[str, Any] | None = None) -> None:
         try:
@@ -1027,6 +1118,7 @@ def ensure_files(project: str | Path = ".") -> dict[str, Any]:
         "version": HARBILIG_VERSION,
         "word_core_path": str(engine.word_core_path),
         "word_core_version": str(word_core.get("version") or ""),
+        "adaptive_learning": engine.adaptive_model.status() if engine.adaptive_model else {"enabled": False},
     }
 
 

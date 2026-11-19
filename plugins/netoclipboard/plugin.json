@@ -1,0 +1,1 @@
+{"id":"netoclipboard","name":"NetoClipboard","version":"1.0.0","entry":"main.py","description":"Güvenli pano geçmişi.","permissions":["clipboard_read","clipboard_write"]}

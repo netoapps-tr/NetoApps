@@ -19,7 +19,9 @@ if (-not $env:HUGGINGFACE_API_KEY) {
 $env:OPENAI_API_KEY = $env:HUGGINGFACE_API_KEY
 $env:OPENAI_API_BASE = "https://router.huggingface.co/v1"
 
-$Model = "openai/Qwen/Qwen2.5-Coder-7B-Instruct"
+# HF router model kimliği provider öneki olmadan kullanılır.
+# 7B sürümü Aider kod düzenlemeleri için yeterli kaliteyi korurken daha hafiftir.
+$Model = "Qwen/Qwen2.5-Coder-7B-Instruct"
 
 Write-Host "NetOps Aider basliyor: Hugging Face router" -ForegroundColor Green
 Write-Host "Model: $Model" -ForegroundColor DarkGray

@@ -24,6 +24,11 @@ try:
 except Exception:  # pragma: no cover
     _NETOPS_CONFIG_PROFANITY = []
 
+try:
+    from neto_adaptive_intent import AdaptiveIntentModel
+except Exception:  # pragma: no cover - keep minimal installs usable
+    AdaptiveIntentModel = None
+
 VERSION = "2.1"
 MEMORY_FILE = "netops_memory.json"
 WORD_CORE_FILE = "netops_word_core.json"
@@ -1417,6 +1422,7 @@ class NetOpsOneEngineV3:
         # Yanıt üretimi bu sürümde tamamen deterministiktir; Ollama/API çağrısı yok.
         self._turns: deque[dict[str, str]] = deque(maxlen=6)
         self._last_media: dict[str, str] = {}
+        self.adaptive_model = AdaptiveIntentModel() if AdaptiveIntentModel is not None else None
         self.ensure_memory()
         self.ensure_word_core()
 
@@ -1769,6 +1775,15 @@ class NetOpsOneEngineV3:
             "answer": NetOpsOneText.clean_model(answer)[:1200],
             "intent": str(intent or "response"),
         })
+        if self.adaptive_model is not None and intent in {
+            "quick_chat", "command", "music_play", "recipe_search",
+            "web_search", "automation_draft",
+        }:
+            try:
+                # Only compact feature counters are persisted by the learner.
+                self.adaptive_model.observe(raw, intent)
+            except Exception:
+                pass
 
     def detect_command(self, normalized: str) -> str | None:
         if not self.command_detector:
@@ -1812,6 +1827,15 @@ class NetOpsOneEngineV3:
                 )
                 if result and result != "NETOPS_ONE_READY":
                     return NetOpsOneText.clean_inline(result)
+            except Exception:
+                pass
+        # Catch new casual phrasing without allowing an uncertain prediction
+        # to suppress the normal memory and web-search fallback.
+        if self.adaptive_model is not None:
+            try:
+                prediction = self.adaptive_model.predict(message)
+                if prediction and prediction.label == "quick_chat":
+                    return "Buradayım. Bunu konuşabiliriz; ne yapmak istediğini biraz açar mısın?"
             except Exception:
                 pass
         return None

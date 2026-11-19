@@ -10,7 +10,7 @@ except Exception:
 try:
     from neto_version import APP_TITLE_EN, APP_TITLE_TR
 except Exception:
-    APP_TITLE_TR = "NetOps v10.37.0"
+    APP_TITLE_TR = "NetOps v1.42.0"
     APP_TITLE_EN = APP_TITLE_TR
 
 

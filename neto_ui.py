@@ -212,7 +212,14 @@ def _play_intro_sound(path):
         return None
 
 
-def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds=9.0):
+def run_logo_intro(
+    root,
+    data,
+    on_started=None,
+    get_asset_path=None,
+    max_seconds=9.0,
+    startup_status_provider=None,
+):
     """Logo animasyonu + ses ile otomatik açılış (v1.40 eklentisi).
 
     Klasik "Başlat" kapısının YERİNE geçer: animasyon ve ses biter bitmez
@@ -236,7 +243,7 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
 
     win = ctk.CTkToplevel(root)
     win.title("NetOps")
-    win.geometry("420x420")
+    win.geometry("460x520")
     win.resizable(False, False)
     win.configure(fg_color="#000000")
     try:
@@ -244,7 +251,7 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
     except Exception:
         pass
     try:
-        center_window(win, 420, 420)
+        center_window(win, 460, 520)
     except Exception:
         pass
     try:
@@ -257,8 +264,61 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
         pass
     set_window_icon(win, get_asset_path)
 
-    holder = ctk.CTkLabel(win, text="", fg_color="#000000")
-    holder.pack(fill="both", expand=True)
+    shell = ctk.CTkFrame(
+        win,
+        fg_color="#0A1020",
+        corner_radius=28,
+        border_width=1,
+        border_color="#24477D",
+    )
+    shell.pack(fill="both", expand=True, padx=10, pady=10)
+
+    brand = ctk.CTkLabel(
+        shell,
+        text="NETOPS",
+        text_color="#F7FAFF",
+        font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+    )
+    brand.pack(anchor="w", padx=26, pady=(22, 0))
+
+    holder = ctk.CTkLabel(shell, text="", fg_color="#0A1020", width=260, height=260)
+    holder.pack(pady=(2, 0))
+
+    status_var = ctk.StringVar(value="Yerel çekirdek hazırlanıyor")
+    status_label = ctk.CTkLabel(
+        shell,
+        textvariable=status_var,
+        text_color="#A9C5F5",
+        font=ctk.CTkFont(family="Segoe UI", size=12),
+    )
+    status_label.pack(pady=(2, 7))
+
+    devices_var = ctk.StringVar(value="0 bağlı cihaz")
+    devices_label = ctk.CTkLabel(
+        shell,
+        textvariable=devices_var,
+        text_color="#7F91B2",
+        font=ctk.CTkFont(family="Segoe UI", size=10),
+    )
+    devices_label.pack(pady=(0, 12))
+
+    progress = ctk.CTkProgressBar(
+        shell,
+        height=4,
+        corner_radius=2,
+        fg_color="#172542",
+        progress_color="#4E91FF",
+    )
+    progress.pack(fill="x", padx=26, pady=(0, 9))
+    progress.set(0)
+
+    footer = ctk.CTkLabel(
+        shell,
+        text="Güvenli yerel bağlantı • Hazırlanıyor",
+        text_color="#7183A5",
+        font=ctk.CTkFont(family="Segoe UI", size=9),
+    )
+    footer.pack(pady=(0, 18))
 
     images = []
     for frame in frames:
@@ -270,7 +330,27 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
     if sound_path:
         _play_intro_sound(sound_path)
 
-    state = {"done": False, "job": None}
+    state = {"done": False, "job": None, "status_job": None}
+
+    def refresh_status():
+        if state["done"]:
+            return
+        try:
+            payload = startup_status_provider() if callable(startup_status_provider) else {}
+            payload = payload if isinstance(payload, dict) else {}
+            status_var.set(str(payload.get("status") or "Yerel çekirdek hazır"))
+            count = int(payload.get("devices") or 0)
+            devices_var.set(f"{count} bağlı cihaz" if count != 1 else "1 bağlı cihaz")
+            if payload.get("connected"):
+                footer.configure(text="Güvenli yerel bağlantı • Hazır")
+            else:
+                footer.configure(text="Güvenli yerel bağlantı • Yerel mod")
+        except Exception:
+            pass
+        try:
+            state["status_job"] = win.after(300, refresh_status)
+        except Exception:
+            state["status_job"] = None
 
     def finish(*_args):
         if state["done"]:
@@ -279,6 +359,11 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
         try:
             if state["job"] is not None:
                 win.after_cancel(state["job"])
+        except Exception:
+            pass
+        try:
+            if state["status_job"] is not None:
+                win.after_cancel(state["status_job"])
         except Exception:
             pass
         try:
@@ -311,6 +396,7 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
         if image is not None:
             try:
                 holder.configure(image=image)
+                progress.set(min(1.0, (index + 1) / max(1, len(images))))
             except Exception:
                 pass
         delay = int(delays[index]) if index < len(delays) else 40
@@ -333,6 +419,7 @@ def run_logo_intro(root, data, on_started=None, get_asset_path=None, max_seconds
         pass
 
     win.after(0, lambda: animate(0))
+    win.after(0, refresh_status)
     return win
 
 
@@ -343,6 +430,7 @@ def run_launch_gate(
     veri_kaydet,
     dil_kaydet,
     on_started=None,
+    startup_status_provider=None,
 ):
     """Show a non-blocking startup gate after the main UI has been constructed.
 
@@ -355,15 +443,15 @@ def run_launch_gate(
         data = {}
 
     # ------------------------------------------------------------------
-    # GİRİŞ EKRANI ATLAMA (v1.40 eklentisi — YALNIZCA EKLEME).
-    # Ayarlarda "giris_ekrani_atla" true ise "Neto'ya Hoş Geldiniz /
-    # Başlat" penceresi hiç oluşturulmaz; program doğrudan ana arayüzle
-    # açılır. Ayar kapalıysa aşağıdaki mevcut akış birebir aynen çalışır.
+    # Üretim açılışı doğrudan ana arayüze gider. Eski dil/Live Mode kapısı
+    # yalnızca geliştirici açıkça istediğinde incelenir; normal kullanıcı
+    # açılışında bu ekranın tekrar görünmesi mümkün değildir.
     # ------------------------------------------------------------------
     try:
-        if bool(data.get("giris_ekrani_atla", False)):
+        startup_gate_enabled = os.environ.get("NETO_ENABLE_STARTUP_GATE", "").strip() == "1"
+        if not startup_gate_enabled or bool(data.get("giris_ekrani_atla", False)):
             try:
-                print("[LAUNCH_GATE] giris ekrani atlandi (giris_ekrani_atla=true)", flush=True)
+                print("[LAUNCH_GATE] eski giris ekrani atlandi", flush=True)
             except Exception:
                 pass
             # Orijinal finish_reveal() dizisiyle aynı sıra: ana pencereyi
@@ -399,6 +487,7 @@ def run_launch_gate(
                 data,
                 on_started=on_started,
                 get_asset_path=get_asset_path,
+                startup_status_provider=startup_status_provider,
             )
             if logo_window is not None:
                 try:

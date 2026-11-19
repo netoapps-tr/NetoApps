@@ -25,6 +25,7 @@ _LAST_LINKS: list[dict[str, str]] = []
 
 SEARCH_ENGINE = "https://duckduckgo.com/?q={query}"
 SEARCH_ENGINE_HTML = "https://html.duckduckgo.com/html/?q={query}&kl=tr-tr"
+DEFAULT_BROWSER_URL = "https://duckduckgo.com/"
 BING_SEARCH = "https://www.bing.com/search?q={query}&cc=tr&setlang=tr"
 GOOGLE_SEARCH = "https://www.google.com/search?q={query}&hl=tr&gl=tr"
 MAX_TEXT_CHARS = 5500
@@ -496,7 +497,7 @@ def browser_worker(url, logo_yolu, command_queue=None, response_queue=None):
                 req_id = str(cmd.get("id") or "")
                 try:
                     if action in {"open_url", "web_open"}:
-                        self.tarayiciyi_baslat(str(cmd.get("url") or "https://www.google.com"))
+                        self.tarayiciyi_baslat(str(cmd.get("url") or DEFAULT_BROWSER_URL))
                         if req_id and response_queue:
                             _put_response(response_queue, req_id, {"ok": True})
                     elif action == "web_search":
@@ -608,7 +609,7 @@ def browser_worker(url, logo_yolu, command_queue=None, response_queue=None):
         print(f"Tarayici Hatasi: {e}", flush=True)
 
 
-def _ensure_browser(url: str = "https://www.google.com") -> bool:
+def _ensure_browser(url: str = DEFAULT_BROWSER_URL) -> bool:
     global _BROWSER_PROCESS, _BROWSER_COMMAND_QUEUE, _BROWSER_RESPONSE_QUEUE
     with _BROWSER_LOCK:
         if _BROWSER_PROCESS is not None and _BROWSER_PROCESS.is_alive():
@@ -627,7 +628,7 @@ def _ensure_browser(url: str = "https://www.google.com") -> bool:
 
 def browser_command(action: str, timeout: float = TOOL_TIMEOUT, **kwargs) -> dict[str, object]:
     try:
-        _ensure_browser(str(kwargs.get("url") or "https://www.google.com"))
+        _ensure_browser(str(kwargs.get("url") or DEFAULT_BROWSER_URL))
         req_id = f"{time.time_ns()}-{os.getpid()}"
         payload = {"id": req_id, "action": action, **kwargs}
         _BROWSER_COMMAND_QUEUE.put(payload)
@@ -645,20 +646,12 @@ def browser_command(action: str, timeout: float = TOOL_TIMEOUT, **kwargs) -> dic
         return {"ok": False, "error": str(exc)[:220]}
 
 
-def neto_browser_ac(url="https://www.google.com"):
+def neto_browser_ac(url=DEFAULT_BROWSER_URL):
     import __main__ as main_mod
-    eklenti_aktif_mi = getattr(main_mod, "eklenti_aktif_mi", False)
-
-    if not eklenti_aktif_mi:
-        if hasattr(main_mod, "animasyonlu_yazi"):
-            main_mod.animasyonlu_yazi("Hocam eklenti aktif degil! Lutfen once panelden aktifleştirin.")
-        if hasattr(main_mod, "ses_oynat"):
-            main_mod.ses_oynat("hata")
-        return
     try:
-        _ensure_browser(str(url or "https://www.google.com"))
+        _ensure_browser(str(url or DEFAULT_BROWSER_URL))
         if _BROWSER_COMMAND_QUEUE is not None:
-            _BROWSER_COMMAND_QUEUE.put({"action": "open_url", "url": str(url or "https://www.google.com")})
+            _BROWSER_COMMAND_QUEUE.put({"action": "open_url", "url": str(url or DEFAULT_BROWSER_URL)})
     except Exception as e:
         if hasattr(main_mod, "animasyonlu_yazi"):
             main_mod.animasyonlu_yazi(f"Tarayici acilamadi: {e}")

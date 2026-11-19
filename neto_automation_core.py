@@ -58,6 +58,8 @@ TRIGGER_TYPES = {
 
 ACTION_TYPES = {
     "notify",
+    "desktop_hotkey",
+    "focus_window",
     "run_program",
     "run_command",
     "open_url",
@@ -75,6 +77,8 @@ ACTION_TYPES = {
 
 ACTION_PERMISSIONS = {
     "notify": set(),
+    "desktop_hotkey": {"input_control"},
+    "focus_window": {"input_control"},
     "run_program": {"process_run"},
     "run_command": {"process_run"},
     "open_url": {"network"},
@@ -536,6 +540,12 @@ def _normalize_action(action: dict[str, Any], index: int) -> dict[str, Any]:
     if action_type == "notify":
         value["title"] = str(value.get("title", "Neto Otomasyon")).strip() or "Neto Otomasyon"
         value["message"] = _require_text(value, "message", "Bildirim mesajı")
+
+    elif action_type == "desktop_hotkey":
+        value["name"] = _require_text(value, "name", "Masaüstü kısayolu")
+
+    elif action_type == "focus_window":
+        value["title"] = _require_text(value, "title", "Pencere başlığı")
 
     elif action_type == "run_program":
         value["path"] = _require_text(value, "path", "Program yolu")
@@ -1412,6 +1422,22 @@ def _execute_action(
         shown = _notify_windows(title, message)
         return ActionResult(action_type, True, "Bildirim işlendi.", {"shown": shown})
 
+    if action_type == "desktop_hotkey":
+        from neto_desktop_actions import execute_hotkey
+
+        result = execute_hotkey(action["name"])
+        if not result.get("ok"):
+            raise ActionFailed(str(result.get("message") or "Kısayol çalıştırılamadı."))
+        return ActionResult(action_type, True, str(result.get("message") or "Kısayol çalıştırıldı."), result)
+
+    if action_type == "focus_window":
+        from neto_desktop_actions import focus_window
+
+        result = focus_window(action["title"])
+        if not result.get("ok"):
+            raise ActionFailed(str(result.get("message") or "Pencere odaklanamadı."))
+        return ActionResult(action_type, True, str(result.get("message") or "Pencere öne alındı."), result)
+
     if action_type == "run_program":
         path = Path(action["path"])
         if not path.exists():
@@ -2149,8 +2175,17 @@ def set_meta(key: str, value: Any) -> None:
 
 
 def get_meta(key: str, default: Any = None) -> Any:
-    with contextlib.closing(get_connection()) as connection:
-        row = connection.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    try:
+        with contextlib.closing(get_connection()) as connection:
+            row = connection.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        # A removed or moved automation database must recover instead of
+        # taking down scene execution or the desktop UI.
+        if "no such table" not in str(exc).casefold():
+            raise
+        initialize_database()
+        with contextlib.closing(get_connection()) as connection:
+            row = connection.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return json_loads(row["value"], default) if row else default
 
 

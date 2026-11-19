@@ -13,8 +13,9 @@ class WttrProvider:
             data = http.get_json(
                 f"https://wttr.in/{encoded}",
                 {"format": "j1", "lang": "tr"},
-                timeout=9,
+                timeout=4,
                 ttl_seconds=900,
+                retries=0,
             )
             return ProviderResult(self.name, True, data=data)
         except Exception as exc:

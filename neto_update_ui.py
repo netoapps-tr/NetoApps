@@ -225,9 +225,7 @@ class _ProgressWindow:
             path = neto_updater.download_update(self.update, progress_callback=self._progress)
             if self.cancelled:
                 return
-            from neto_update_helper import install_update
-
-            result = install_update(
+            result = neto_updater.install_update(
                 path,
                 restart=True,
                 release_id=self.update.get("release_id"),
@@ -285,7 +283,7 @@ def start_download_and_install(root: Any, update: Dict[str, Any], notify_callbac
             ),
         )
         return None
-    if not update.get("download_url"):
+    if not update.get("download_url") and update.get("update_mode") != "system_files":
         try:
             webbrowser.open(str(update.get("html_url") or neto_updater.RELEASES_URL))
         except Exception:

@@ -35,7 +35,10 @@ except Exception:
 # AYARLAR
 # =========================================================
 
-AI_MODEL_AKTIF = True
+# NetOps now uses the local Harbilig engine as its canonical response path.
+# Keep the legacy Ollama adapter available for rollback, but never start it
+# implicitly or download a model during normal application use.
+AI_MODEL_AKTIF = False
 
 AI_MODEL_ADI = "gemma3:4b"
 
@@ -1858,13 +1861,37 @@ def kimlik_cevabi_ara(metin):
 # ANA CEVAP FONKSİYONU
 # =========================================================
 
-def _neto_ai_cevap_ver_core(soru, agent_modu=False):
-    """NetOps One ana sohbet çekirdeğini tek ve modelsiz akıştan çalıştırır."""
+_RAW_TRANSLATION_KEY_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
+_SAFE_ANSWER_FALLBACK = (
+    "Bu isteği işlerken güvenilir bir yanıt oluşturamadım. "
+    "Konuyu daha kısa veya daha belirgin kelimelerle tekrar deneyebilir misin?"
+)
+
+
+def neto_ai_cevap_metnini_temizle(cevap):
+    """Return one display-safe answer for every NetOps conversation surface."""
+    text = str(cevap or "").strip()
+    if not text:
+        return _SAFE_ANSWER_FALLBACK
+
+    # Older fallback routes can return language dictionary keys directly.
+    # Resolve them when possible and never expose an implementation key to UI.
+    if _RAW_TRANSLATION_KEY_RE.fullmatch(text):
+        try:
+            translated = str(T(text) or "").strip()
+        except Exception:
+            translated = ""
+        text = translated if translated and translated != text else _SAFE_ANSWER_FALLBACK
+
+    return text
+
+
+def neto_ai_cevap_sonucu(soru, agent_modu=False):
+    """Run the canonical Harbilig engine and retain safe reply metadata."""
     metin = metin_temizle(soru)
 
     if not metin:
-        return "Bir şey yazmadın."
-
+        return {"text": "Bir şey yazmadın.", "intent": "empty", "source": "local"}
 
     try:
         from netops_one_engine import get_engine
@@ -1881,31 +1908,40 @@ def _neto_ai_cevap_ver_core(soru, agent_modu=False):
             SON_BILGI["automation_draft"] = None
         if sonuc.intent in {"web_search", "location_search", "location_data", "location_context"} and sonuc.text:
             SON_BILGI["internet"] = sonuc.text
-            SON_BILGI["baslik"] = "NetOps One web sonucu"
+            SON_BILGI["baslik"] = "NetOps Harbilig web sonucu"
             SON_BILGI["govde"] = sonuc.text[:900]
             SON_BILGI["kaynak"] = sonuc.source
             SON_BILGI["zaman"] = time.time()
         if sonuc.text:
-            return sonuc.text
+            return {
+                "text": neto_ai_cevap_metnini_temizle(sonuc.text),
+                "intent": str(getattr(sonuc, "intent", "reply") or "reply"),
+                "source": str(getattr(sonuc, "source", "netops_harbilig") or "netops_harbilig"),
+                "cached": bool(getattr(sonuc, "cached", False)),
+                "learned": bool(getattr(sonuc, "learned", False)),
+            }
     except Exception as one_exc:
         try:
-            print("NETOPS ONE HATASI:", one_exc)
+            print("NETOPS HARBILIG HATASI:", one_exc)
         except Exception:
             pass
 
-    # NetOps One yuklenemezse bile harici modele dusme; tamamen yerel guvenli cevap ver.
+    # If the canonical engine cannot load, retain a small local fallback
+    # rather than switching a different model or exposing internal keys.
     sohbet = sohbet_ara(metin)
     if sohbet:
-        return sohbet
+        return {"text": neto_ai_cevap_metnini_temizle(sohbet), "intent": "local_fallback", "source": "local"}
 
     bilgi = bilgi_hafizasinda_ara(metin)
     if bilgi:
-        return bilgi
+        return {"text": neto_ai_cevap_metnini_temizle(bilgi), "intent": "memory_fallback", "source": "local"}
 
-    return (
-        "Bu isteği işlerken güvenilir bir yanıt oluşturamadım. "
-        "Konuyu daha kısa veya daha belirgin kelimelerle tekrar deneyebilir misin?"
-    )
+    return {"text": _SAFE_ANSWER_FALLBACK, "intent": "fallback", "source": "local"}
+
+
+def _neto_ai_cevap_ver_core(soru, agent_modu=False):
+    """Legacy string API backed by the canonical structured response."""
+    return str(neto_ai_cevap_sonucu(soru, agent_modu=agent_modu).get("text") or _SAFE_ANSWER_FALLBACK)
 
 
 def son_automation_draft():
@@ -1916,7 +1952,8 @@ def son_automation_draft():
 
 # Dil zorlayıcı dış fonksiyon
 def neto_ai_cevap_ver(soru, agent_modu=False):
-    return _ai_dil_cevir(_neto_ai_cevap_ver_core(soru, agent_modu=agent_modu))
+    response = _neto_ai_cevap_ver_core(soru, agent_modu=agent_modu)
+    return neto_ai_cevap_metnini_temizle(_ai_dil_cevir(response))
 
 
 

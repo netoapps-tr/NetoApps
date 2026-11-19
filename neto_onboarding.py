@@ -176,6 +176,13 @@ def show_onboarding_if_needed(
     lang: str = "tr",
     on_complete: Callable[[], None] | None = None,
 ) -> bool:
+    # The production entry point goes directly to the main NetOps surface.
+    # Keep the old walkthrough available only as an explicit developer opt-in.
+    if (
+        os.environ.get("NETO_ENABLE_ONBOARDING", "").strip() != "1"
+        and os.environ.get("NETO_FORCE_ONBOARDING", "").strip() != "1"
+    ):
+        return False
     if onboarding_completed():
         return False
 

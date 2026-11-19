@@ -105,6 +105,21 @@ class WeatherEngine:
         if self._wants_tomorrow(q) and not deep:
             return self._format_tomorrow(forecast.data, location_label)
 
+        # A plain current-weather question should be fast. Air quality and
+        # secondary-source checks are useful for specialized questions, but
+        # they can turn a one-request answer into a 30-second network chain.
+        needs_extended_context = (
+            deep
+            or self._wants_air_quality(q)
+            or self._wants_sensors(q)
+            or self._wants_aviation(q)
+            or self._wants_climate(q)
+            or self._wants_flood(q)
+            or self._wants_all_sources(q)
+        )
+        if not needs_extended_context:
+            return self._format_current(query, location, location_label, results)
+
         air = self.air.fetch(self.http, location)
         met = self.met.fetch(self.http, location)
         results["air"] = air
@@ -204,6 +219,10 @@ class WeatherEngine:
     @staticmethod
     def _wants_sensors(q):
         return any(x in q for x in ["sensor", "olcum", "istasyon", "gozlem"])
+
+    @staticmethod
+    def _wants_air_quality(q):
+        return any(x in q for x in ["hava kalitesi", "aqi", "pm2", "polen", "uv"])
 
     def _format_current(self, query, location, label, results):
         data = results["forecast"].data

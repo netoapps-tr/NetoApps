@@ -47,6 +47,24 @@ class ConversationEngineTests(unittest.TestCase):
         self.assertNotIn("[STATUS:", result.text)
         self.assertNotIn("[THINKING_PROCESS]", result.text)
 
+    def test_assistant_response_contract_hides_raw_translation_keys(self) -> None:
+        import neto_ai
+
+        with patch.object(neto_ai, "T", return_value="İyiyim, bayağı iyiyim. Sen nasılsın?"):
+            self.assertEqual(
+                neto_ai.neto_ai_cevap_metnini_temizle("ai_how_are_you_short"),
+                "İyiyim, bayağı iyiyim. Sen nasılsın?",
+            )
+
+    def test_assistant_response_contract_keeps_harbilig_metadata(self) -> None:
+        import neto_ai
+
+        result = neto_ai.neto_ai_cevap_sonucu("merhaba")
+
+        self.assertEqual(result["intent"], "quick_chat")
+        self.assertEqual(result["source"], "local")
+        self.assertEqual(result["text"], "Buradayım. Ne yapmak istiyorsun?")
+
     def test_conversation_recall_remembers_first_message(self) -> None:
         self.engine.search_client.search = lambda query, limit=3: []
 
@@ -115,6 +133,77 @@ class ConversationEngineTests(unittest.TestCase):
         self.assertEqual(calls, ["domates çorbası tarifi"])
         self.assertNotIn("http", result.text.casefold())
         self.assertNotIn("Web'de", result.text)
+
+    def test_search_client_uses_bing_when_duckduckgo_is_blocked(self) -> None:
+        from netops_harbilig_engine import HarbiligSearchClient
+
+        client = HarbiligSearchClient()
+        client._scrapling_search = lambda query, limit: []
+        client._duckduckgo_html = lambda query, limit: []
+        client._bing_search = lambda query, limit: [
+            __import__("netops_harbilig_engine").HarbiligSearchItem(
+                "Python programlama dili",
+                "Python, genel amaçlı ve yüksek seviyeli bir programlama dilidir.",
+                "https://www.python.org/",
+            )
+        ]
+
+        rows = client.search("Python nedir", limit=3)
+
+        assert len(rows) == 1
+        assert rows[0].title == "Python programlama dili"
+
+    def test_bing_html_parser_extracts_title_snippet_and_real_url(self) -> None:
+        from netops_harbilig_engine import HarbiligSearchClient
+
+        html = (
+            '<li class="b_algo"><h2><a href="https://example.com/python">'
+            "Python programlama dili"
+            '</a></h2><div class="b_caption"><p>'
+            "Python genel amaçlı bir programlama dilidir."
+            "</p></div></li>"
+        )
+
+        rows = HarbiligSearchClient()._parse_bing_html(html, limit=3)
+
+        assert rows[0].title == "Python programlama dili"
+        assert rows[0].body.startswith("Python genel amaçlı")
+        assert rows[0].url == "https://example.com/python"
+
+    def test_web_answer_prefers_clean_search_snippet_over_noisy_page_text(self) -> None:
+        from netops_harbilig_engine import HarbiligSearchItem
+
+        self.engine.search_client.search = lambda query, limit=3: [
+            HarbiligSearchItem(
+                "Python programlama dili",
+                "Python genel amaçlı ve yüksek seviyeli bir programlama dilidir.",
+                "https://example.com/python",
+            )
+        ]
+        self.engine.search_client.fetch_page_text = lambda _url: (
+            "Notice: fallback page. 0 1 1 2 3 5 8 13 21 34 55 89 144 233"
+        )
+
+        result = self.engine.answer("Python nedir")
+
+        assert result.ok is True
+        assert "Python genel amaçlı" in result.text
+        assert result.learned is True
+
+    def test_multi_source_web_summary_is_learned_for_follow_up_questions(self) -> None:
+        from netops_harbilig_engine import HarbiligSearchItem
+
+        self.engine.search_client.search = lambda query, limit=3: [
+            HarbiligSearchItem("Python", "Python genel amaçlı ve yüksek seviyeli bir programlama dilidir."),
+            HarbiligSearchItem("Python tarihi", "Python 1991 yılında kullanıma sunulan bir programlama dilidir."),
+        ]
+
+        first = self.engine.answer("Python nedir")
+        second = self.engine.answer("Python nedir")
+
+        assert first.learned is True
+        assert second.intent == "memory"
+        assert second.cached is True
 
     def test_irrelevant_results_are_dropped(self) -> None:
         from netops_one_engine import NetOpsOneStructuredSearch, SearchItem

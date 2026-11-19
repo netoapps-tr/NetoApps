@@ -79,8 +79,11 @@ def _sync_scrollable_surface(widget, palette, bg_key="bg"):
 
 
 def _normalize_surface_style(value):
-    raw = str(value or "experians").strip().lower()
+    raw = str(value or "fluent").strip().lower()
     aliases = {
+        "fluent": "fluent",
+        "fluent design": "fluent",
+        "microsoft fluent": "fluent",
         "liquid-glass": "liquid-glass",
         "liquid glass": "liquid-glass",
         "liquid_glass": "liquid-glass",
@@ -91,10 +94,16 @@ def _normalize_surface_style(value):
         "experians": "experians",
         "experians 2.5": "experians",
         "neto experians": "experians",
+        "zenka": "zenkamind",
+        "zenkamind ai": "zenkamind",
+        "zenkamind": "zenkamind",
         "klasik": "classic",
         "classic": "classic",
     }
-    return aliases.get(raw, "experians")
+    normalized = aliases.get(raw, "fluent")
+    # Fluent is now the sole supported visual language. Old saved values are
+    # migrated on read instead of reviving retired surfaces.
+    return normalized if normalized == "fluent" else "fluent"
 
 TEXTS = {
     "tr": {
@@ -133,9 +142,11 @@ TEXTS = {
         "light": "Açık",
         "surface_style": "Tasarım dili",
         "surface_style_desc": f"{APP_NAME} arayüzünün tasarım dilini seç.",
+        "fluent": "Astryx Design",
         "classic": "Klasik",
         "liquid_glass": "Liquid Glass",
         "experians": APP_DESIGN_FULL_TITLE,
+        "zenkamind": "ZenkaMind",
         "startup_media": "Açılış animasyonu ve sesi",
         "startup_media_desc": "Başlangıç animasyonunu ve açılış sesini yönet.",
         "startup_animation": "Açılış animasyonu",
@@ -229,9 +240,11 @@ TEXTS = {
         "light": "Light",
         "surface_style": "Design language",
         "surface_style_desc": f"Choose the design language for the {APP_NAME} interface.",
+        "fluent": "Astryx Design",
         "classic": "Classic",
         "liquid_glass": "Liquid Glass",
         "experians": APP_DESIGN_FULL_TITLE,
+        "zenkamind": "ZenkaMind",
         "startup_media": "Startup animation and sound",
         "startup_media_desc": "Manage the startup animation and sound.",
         "startup_animation": "Startup animation",
@@ -293,29 +306,29 @@ TEXTS = {
 
 
 DARK = {
-    "bg": "#09090B",
-    "sidebar": "#1A1A1F",
-    "card": "#1B1B20",
-    "entry": "#141418",
-    "border": "#383841",
-    "text": "#F5F5F7",
-    "muted": "#AAAABD",
-    "accent": "#22C55E",
-    "hover": "#292930",
-    "switch_off": "#41414B",
+    "bg": "#0F1115",
+    "sidebar": "#14171C",
+    "card": "#1B1F26",
+    "entry": "#191D23",
+    "border": "#3A4350",
+    "text": "#F5F7FA",
+    "muted": "#B8C0CC",
+    "accent": "#60CDFF",
+    "hover": "#303742",
+    "switch_off": "#4A535F",
 }
 
 LIGHT = {
-    "bg": "#F4F5F7",
+    "bg": "#F3F3F3",
     "sidebar": "#FFFFFF",
     "card": "#FFFFFF",
-    "entry": "#F0F1F4",
-    "border": "#C8CDD6",
-    "text": "#17171B",
-    "muted": "#666674",
-    "accent": "#22C55E",
-    "hover": "#E4E7EC",
-    "switch_off": "#B8BEC9",
+    "entry": "#FFFFFF",
+    "border": "#C8C8C8",
+    "text": "#1A1A1A",
+    "muted": "#5D5D5D",
+    "accent": "#0067C0",
+    "hover": "#E5E5E5",
+    "switch_off": "#A6A6A6",
 }
 
 
@@ -492,7 +505,7 @@ class NetoSettingsPage:
             text="←",
             width=48,
             height=42,
-            corner_radius=13,
+            corner_radius=6,
             fg_color=p["card"],
             hover_color=p["hover"],
             text_color=p["text"],
@@ -529,7 +542,7 @@ class NetoSettingsPage:
             fg_color=p["sidebar"],
             border_width=1,
             border_color=p["border"],
-            corner_radius=20,
+            corner_radius=8,
         )
         self.sidebar.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
         self.sidebar.grid_propagate(False)
@@ -558,7 +571,7 @@ class NetoSettingsPage:
                 self.sidebar,
                 text=f"{icon}   {self._text(key)}",
                 height=41,
-                corner_radius=12,
+                corner_radius=6,
                 anchor="w",
                 border_spacing=10,
                 fg_color="transparent",
@@ -586,7 +599,7 @@ class NetoSettingsPage:
             fg_color=p["card"],
             border_width=1,
             border_color=p["border"],
-            corner_radius=20,
+            corner_radius=8,
         )
         self.content_shell.grid(row=0, column=1, sticky="nsew")
         self.content_shell.grid_rowconfigure(0, weight=1)
@@ -595,7 +608,7 @@ class NetoSettingsPage:
         self.content = ctk.CTkScrollableFrame(
             self.content_shell,
             fg_color=p["bg"],
-            corner_radius=15,
+            corner_radius=8,
             scrollbar_button_color=p["border"],
             scrollbar_button_hover_color=p["hover"],
         )
@@ -628,7 +641,7 @@ class NetoSettingsPage:
             fg_color=p["card"],
             border_width=1,
             border_color=p["border"],
-            corner_radius=17,
+            corner_radius=8,
         )
         frame.pack(fill="x", padx=13, pady=(0, 13))
         ctk.CTkLabel(
@@ -695,7 +708,7 @@ class NetoSettingsPage:
             parent,
             text=self._text(text_key),
             height=36,
-            corner_radius=10,
+            corner_radius=6,
             fg_color=p["accent"] if primary else p["entry"],
             hover_color=p["hover"],
             border_width=0 if primary else 1,
@@ -726,7 +739,7 @@ class NetoSettingsPage:
             self.apply_theme_callback(
                 self.data["tema"],
                 self.data.get("renk_temasi", "green"),
-                _normalize_surface_style(self.data.get("arayuz_stili", "experians")),
+                _normalize_surface_style(self.data.get("arayuz_stili", "fluent")),
             )
         except TypeError:
             try:
@@ -806,7 +819,7 @@ class NetoSettingsPage:
         self.data.update({
             "tema": "dark",
             "renk_temasi": "green",
-            "arayuz_stili": "experians",
+            "arayuz_stili": "fluent",
             "secilen_gif": "yukleme.gif",
             "secilen_ses": "varsayilan",
             "startup_animation_enabled": True,
@@ -869,29 +882,16 @@ class NetoSettingsPage:
         row.pack(fill="x", padx=16, pady=(2, 15))
         style = ctk.CTkSegmentedButton(
             row,
-            values=[self._text("classic"), self._text("liquid_glass"), self._text("experians")],
+            values=[self._text("fluent")],
             selected_color=self.palette["accent"],
             selected_hover_color=self.palette["accent"],
             unselected_color=self.palette["entry"],
             unselected_hover_color=self.palette["hover"],
             text_color=self.palette["text"],
-            command=lambda value: self._set_surface_style(
-                "liquid-glass"
-                if value == self._text("liquid_glass")
-                else "experians"
-                if value == self._text("experians")
-                else "classic"
-            ),
+            command=lambda value: self._set_surface_style("fluent"),
         )
         style.pack(side="left")
-        active_style = _normalize_surface_style(self.data.get("arayuz_stili", "experians"))
-        style.set(
-            self._text("experians")
-            if active_style == "experians"
-            else self._text("liquid_glass")
-            if active_style == "liquid-glass"
-            else self._text("classic")
-        )
+        style.set(self._text("fluent"))
 
         card = self._card("startup_media", "startup_media_desc")
         self._switch_row(card, "startup_animation", "startup_animation_enabled", True)
@@ -904,7 +904,7 @@ class NetoSettingsPage:
         gif_name = os.path.basename(str(self.data.get("secilen_gif", "yukleme.gif")))
         sound_name = os.path.basename(str(self.data.get("secilen_ses", "varsayilan")))
 
-        gif_box = ctk.CTkFrame(media, fg_color=self.palette["entry"], corner_radius=12)
+        gif_box = ctk.CTkFrame(media, fg_color=self.palette["entry"], corner_radius=6)
         gif_box.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         ctk.CTkLabel(
             gif_box,
@@ -918,7 +918,7 @@ class NetoSettingsPage:
             fill="x", padx=10, pady=(0, 10)
         )
 
-        sound_box = ctk.CTkFrame(media, fg_color=self.palette["entry"], corner_radius=12)
+        sound_box = ctk.CTkFrame(media, fg_color=self.palette["entry"], corner_radius=6)
         sound_box.grid(row=0, column=1, sticky="ew", padx=(6, 0))
         ctk.CTkLabel(
             sound_box,
@@ -1123,7 +1123,7 @@ class NetoSettingsPage:
                 fg_color=p["entry"],
                 border_width=1,
                 border_color=p["border"],
-                corner_radius=12,
+                corner_radius=8,
             )
             frame.grid(row=0 if column < 2 else 1, column=column % 2, sticky="ew",
                        padx=(0, 5) if column % 2 == 0 else (5, 0), pady=5)
@@ -1200,7 +1200,7 @@ class NetoSettingsPage:
             fg_color=p["entry"],
             border_width=1,
             border_color=p["border"],
-            corner_radius=12,
+            corner_radius=8,
         )
         status_frame.pack(fill="x", padx=16, pady=(4, 8))
 
@@ -1356,7 +1356,11 @@ class NetoSettingsPage:
                     )
                 )
                 download_button.configure(
-                    state="normal" if result.get("download_url") else "disabled"
+                    state=(
+                        "normal"
+                        if result.get("download_url") or result.get("update_mode") == "system_files"
+                        else "disabled"
+                    )
                 )
             else:
                 status_title.configure(
@@ -1556,7 +1560,7 @@ class NetoSettingsPage:
                 row = ctk.CTkFrame(
                     component_list,
                     fg_color=p["entry"],
-                    corner_radius=10,
+                    corner_radius=6,
                 )
                 row.pack(fill="x", pady=3)
                 ctk.CTkLabel(

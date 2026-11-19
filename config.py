@@ -5,7 +5,13 @@ import sys
 try:
     from neto_version import APP_VERSION as _NETO_VERSION
 except Exception:
-    _NETO_VERSION = "10.39.0"
+    _NETO_VERSION = "1.52.0"
+
+try:
+    from neto_fluent_design import FLUENT_DARK as FLUENT_DARK_PALET, FLUENT_LIGHT as FLUENT_LIGHT_PALET
+except Exception:
+    FLUENT_DARK_PALET = {}
+    FLUENT_LIGHT_PALET = {}
 
 # ------------------------------------------------------------
 # 1. Dizin Yolları ve Yardımcı Fonksiyonlar
@@ -310,7 +316,37 @@ LIGHT_PALET = {
     "button_fg": "#e0e0e0", "button_hover": "#cccccc", "button_text": "#000000"
 }
 
-VALID_SURFACE_STYLES = ["classic", "liquid-glass", "experians", "experians3"]
+VALID_SURFACE_STYLES = ["fluent", "classic", "liquid-glass", "experians", "experians3", "zenkamind"]
+
+# ZenkaMind esintili çalışma alanı: siyaha yakın grafit yüzeyler, ince
+# ayırıcılar ve tek bir elektrik mavisi vurgu. Mevcut görünümler korunur.
+ZENKAMIND_DARK_PALET = {
+    "bg": "#0B0D10",
+    "sidebar": "#101318",
+    "card": "#181C23",
+    "neon": "#5B8CFF",
+    "text_main": "#F4F7FC",
+    "text_dim": "#8D97A8",
+    "entry_bg": "#141820",
+    "entry_border": "#2B3442",
+    "button_fg": "#1B212B",
+    "button_hover": "#252E3C",
+    "button_text": "#F4F7FC",
+}
+
+ZENKAMIND_LIGHT_PALET = {
+    "bg": "#F4F6FA",
+    "sidebar": "#FFFFFF",
+    "card": "#FFFFFF",
+    "neon": "#316FEA",
+    "text_main": "#172033",
+    "text_dim": "#667085",
+    "entry_bg": "#F8FAFD",
+    "entry_border": "#D5DCE8",
+    "button_fg": "#EEF3FB",
+    "button_hover": "#E1E9F6",
+    "button_text": "#172033",
+}
 
 LIQUID_GLASS_DARK_PALET = {
     "bg": "#07131B",
@@ -397,6 +433,10 @@ EXPERIANS3_LIGHT_PALET = {
 }
 
 SURFACE_PALETS = {
+    "fluent": {
+        "dark": FLUENT_DARK_PALET,
+        "light": FLUENT_LIGHT_PALET,
+    },
     "classic": {
         "dark": DARK_PALET,
         "light": LIGHT_PALET,
@@ -412,6 +452,10 @@ SURFACE_PALETS = {
     "experians3": {
         "dark": EXPERIANS3_DARK_PALET,
         "light": EXPERIANS3_LIGHT_PALET,
+    },
+    "zenkamind": {
+        "dark": ZENKAMIND_DARK_PALET,
+        "light": ZENKAMIND_LIGHT_PALET,
     },
 }
 LIVE_GIF_PATH = get_first_asset_path("yukleme.gif", "Neto.gif")

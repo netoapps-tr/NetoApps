@@ -14,7 +14,7 @@ echo.
 
 rem ---------- 1) Python kurulu mu? ----------
 set "PY="
-where py >nul 2>&1 && set "PY=py -3"
+where py >nul 2>&1 && set "PY=py -3.12"
 if not defined PY where python >nul 2>&1 && set "PY=python"
 if not defined PY where python3 >nul 2>&1 && set "PY=python3"
 if not defined PY goto :nopython
@@ -62,12 +62,17 @@ echo.
 
 rem Hatalarin gorunmesi icin: konsolu kapatma
 set "NETOPS_KEEP_CONSOLE=1"
+set "NETOPS_QT_UI=1"
+set "NETOPS_LEGACY_UI=0"
+set "NETOPS_NATIVE_UI_EXPERIMENTAL=1"
+set "NETO_ENABLE_STARTUP_UPDATE_CHECK=1"
 
 %PY% "asistan beta.py"
+set "NETOPS_EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 echo ============================================================
-echo    NetOps kapandi.  Cikis kodu: %ERRORLEVEL%
+echo    NetOps kapandi.  Cikis kodu: %NETOPS_EXIT_CODE%
 echo.
 echo    Yukarida bir hata mesaji varsa, o mesaji kopyalayip
 echo    gelistiriciye gonderin. Sorun bu olmadan bulunamaz.
