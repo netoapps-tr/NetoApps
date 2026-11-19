@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 APP_NAME = "Neto Update Center"
 APP_SHORT_NAME = "NUC"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 REPOSITORY = "netoapps-tr/NetoApps"
 REPOSITORY_URL = f"https://github.com/{REPOSITORY}"
 RELEASES_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"

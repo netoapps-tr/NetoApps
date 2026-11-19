@@ -15,6 +15,11 @@ if str(PROJECT) not in sys.path:
 
 
 class UpdateCenterTests(unittest.TestCase):
+    def test_packaged_app_uses_portable_runtime_directory(self) -> None:
+        spec = (PROJECT / "NetoUpdateCenter.spec").read_text(encoding="utf-8")
+
+        self.assertIn('runtime_tmpdir="."', spec)
+
     def test_update_state_maps_legacy_netops_10x_to_current_1x_train(self) -> None:
         import neto_update_center as center
 
