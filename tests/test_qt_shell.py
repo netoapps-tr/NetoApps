@@ -936,6 +936,28 @@ def test_native_qt_now_playing_page_has_media_controls_offscreen():
     app.processEvents()
 
 
+def test_now_playing_cover_replaces_deleted_reveal_animation_safely():
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QApplication
+
+    from netops_qt_shell import NowPlayingCover
+
+    app = QApplication.instance() or QApplication([])
+    cover = NowPlayingCover()
+    cover.set_art(QPixmap(8, 8), animate=True)
+    animation = cover._reveal_animation
+    assert animation is not None
+
+    animation.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    cover.set_art(QPixmap(8, 8), animate=True)
+
+    assert cover._reveal_animation is not None
+    cover.deleteLater()
+    app.processEvents()
+
+
 def test_native_qt_now_playing_compact_card_gestures_open_fullscreen_and_settings():
     from PySide6.QtWidgets import QApplication
 

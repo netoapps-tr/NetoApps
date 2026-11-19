@@ -34,7 +34,7 @@ FEED_URL = f"{RELEASES_URL}.atom"
 EXPANDED_ASSETS_URL = f"{REPO_URL}/releases/expanded_assets/{{tag}}"
 NETWORK_TIMEOUT = 18
 CACHE_SECONDS = 15 * 60
-UPDATER_BUILD = "neto-v1.53.0-release"
+UPDATER_BUILD = "neto-v1.53.1-release"
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "result": None}
 _CACHE_LOCK = threading.RLock()
@@ -511,6 +511,7 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
         available = version_is_newer(release.get("latest_version") or release.get("tag_name"), current)
         release.update(
             {
+                "ok": True,
                 "available": available,
                 "update_available": available,
                 "is_available": available,

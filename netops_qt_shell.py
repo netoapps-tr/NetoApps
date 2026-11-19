@@ -103,8 +103,8 @@ def native_animation_contract() -> dict[str, int]:
 def native_brand_contract() -> dict[str, str]:
     return {
         "app_name": "NetOps",
-        "version": "1.53",
-        "window_title": "NetOps 1.53",
+        "version": "1.53.1",
+        "window_title": "NetOps 1.53.1",
         "logo_file": "Logo.png",
     }
 
@@ -483,6 +483,25 @@ class NowPlayingCover(QLabel):
         self._corner_radius = float(value)
         self.update()
 
+    def _dispose_reveal_animation(self) -> None:
+        animation = self._reveal_animation
+        self._reveal_animation = None
+        if animation is None:
+            return
+        try:
+            animation.stop()
+        except RuntimeError:
+            # DeleteWhenStopped may already have released the Qt wrapper.
+            return
+        try:
+            animation.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _clear_reveal_animation(self, animation: QParallelAnimationGroup) -> None:
+        if self._reveal_animation is animation:
+            self._reveal_animation = None
+
     zoom = Property(float, _get_zoom, _set_zoom)
     corner_radius = Property(float, _get_corner_radius, _set_corner_radius)
 
@@ -499,12 +518,13 @@ class NowPlayingCover(QLabel):
             self._set_zoom(1.0)
             self._set_corner_radius(target_radius)
             return
-        if self._reveal_animation is not None:
-            self._reveal_animation.stop()
-            self._reveal_animation.deleteLater()
+        self._dispose_reveal_animation()
         self._set_zoom(0.62)
         self._set_corner_radius(32.0)
         animation = QParallelAnimationGroup(self)
+        animation.finished.connect(
+            lambda animation=animation: self._clear_reveal_animation(animation)
+        )
         zoom = QPropertyAnimation(self, b"zoom", animation)
         zoom.setDuration(220)
         zoom.setStartValue(0.62)
@@ -517,8 +537,8 @@ class NowPlayingCover(QLabel):
         radius.setEasingCurve(QEasingCurve.Type.OutCubic)
         animation.addAnimation(zoom)
         animation.addAnimation(radius)
-        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         self._reveal_animation = animation
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def clear_art(self, text: str) -> None:
         self._art = QPixmap()
@@ -2603,7 +2623,7 @@ class NetOpsQtWindow(QMainWindow):
 
     def _settings_about_tab(self) -> QWidget:
         page, layout = self._settings_tab("Hakkında", "NetOps native masaüstü arayüzü.")
-        layout.addWidget(QLabel("NetOps v1.53"))
+        layout.addWidget(QLabel("NetOps v1.53.1"))
         layout.addWidget(QLabel("PySide6 Qt Widgets tabanı"))
         layout.addWidget(QLabel(str(Path(__file__).resolve().parent)))
         layout.addStretch(1)

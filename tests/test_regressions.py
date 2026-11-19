@@ -20,8 +20,8 @@ class SourceInvariantTests(unittest.TestCase):
     def test_release_source_is_1_53(self) -> None:
         from neto_version import APP_VERSION, RELEASE_TAG
 
-        self.assertEqual(APP_VERSION, "1.53.0")
-        self.assertEqual(RELEASE_TAG, "v1.53.0")
+        self.assertEqual(APP_VERSION, "1.53.1")
+        self.assertEqual(RELEASE_TAG, "v1.53.1")
 
     def test_titlebar_uses_asynchronous_windows_message(self) -> None:
         source = (PROJECT / "asistan beta.py").read_text(encoding="utf-8-sig")
@@ -237,6 +237,38 @@ class UpdaterHardeningTests(unittest.TestCase):
         self.assertTrue(result["available"])
         self.assertEqual(result["latest_version"], "1.54.0")
         self.assertEqual(result["asset_name"], "NetOps-1.54.exe")
+
+    def test_release_update_result_is_accepted_by_qt_update_flow(self) -> None:
+        import neto_updater
+
+        release = {
+            "release_id": "release-155",
+            "id": "release-155",
+            "tag_name": "v1.55.0",
+            "latest_version": "1.55.0",
+            "name": "NetOps 1.55",
+            "body": "Yeni sürüm",
+            "html_url": "https://github.com/netoapps-tr/NetoApps/releases/tag/v1.55.0",
+            "prerelease": False,
+        }
+        asset = {
+            "id": "asset-155",
+            "name": "NetOps-1.55.exe",
+            "browser_download_url": "https://github.com/netoapps-tr/NetoApps/releases/download/v1.55/NetOps-1.55.exe",
+            "size": 10,
+            "content_type": "application/vnd.microsoft.portable-executable",
+            "digest": "sha256:" + "c" * 64,
+        }
+        with patch.dict(neto_updater._CACHE, {"at": 0.0, "result": None}), patch(
+            "neto_system_updater.check_for_updates",
+            return_value={"manifest_ok": False, "available": False},
+        ), patch.object(neto_updater, "get_current_version", return_value="1.53.0"), patch.object(
+            neto_updater, "_fetch_releases", return_value=[release]
+        ), patch.object(neto_updater, "_fetch_assets", return_value=[asset]):
+            result = neto_updater.check_for_updates(force=True)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["available"])
 
     def test_update_root_can_fall_back_when_temp_is_unavailable(self) -> None:
         import neto_updater
