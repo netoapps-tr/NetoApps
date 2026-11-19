@@ -29,12 +29,13 @@ REPO_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
 API_URL = "https://api.github.com"
 RELEASES_URL = f"{REPO_URL}/releases"
 RELEASES_API_URL = f"{API_URL}/repos/{REPO_OWNER}/{REPO_NAME}/releases"
+LATEST_RELEASE_API_URL = f"{RELEASES_API_URL}/latest"
 RELEASE_BY_TAG_API_URL = f"{RELEASES_API_URL}/tags/{{tag}}"
 FEED_URL = f"{RELEASES_URL}.atom"
 EXPANDED_ASSETS_URL = f"{REPO_URL}/releases/expanded_assets/{{tag}}"
 NETWORK_TIMEOUT = 18
 CACHE_SECONDS = 15 * 60
-UPDATER_BUILD = "neto-v1.53.1-release"
+UPDATER_BUILD = "neto-v1.54.0-release"
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "result": None}
 _CACHE_LOCK = threading.RLock()
@@ -325,7 +326,44 @@ def _looks_prerelease(*values: Any) -> bool:
     return any(re.search(rf"(^|[^a-z]){re.escape(word)}([^a-z]|$)", text) for word in words)
 
 
-def _fetch_releases() -> List[Dict[str, Any]]:
+def _fetch_releases(include_prerelease: bool = False) -> List[Dict[str, Any]]:
+    if not include_prerelease:
+        try:
+            payload, _headers, _status = _http_get(
+                LATEST_RELEASE_API_URL,
+                accept="application/vnd.github+json",
+            )
+            release = json.loads(payload.decode("utf-8", "replace"))
+            if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+                raise RuntimeError("GitHub latest release kararlı değil.")
+            tag = str(release.get("tag_name") or "").strip()
+            if not tag:
+                raise RuntimeError("GitHub latest release etiketi eksik.")
+            title = str(release.get("name") or tag)
+            updated = str(release.get("published_at") or release.get("created_at") or "")
+            version_match = re.search(r"\d+(?:\.\d+)+", tag) or re.search(r"\d+(?:\.\d+)+", title)
+            release_id = _stable_id(release.get("id"), tag, updated)
+            return [
+                {
+                    "release_id": release_id,
+                    "id": release_id,
+                    "tag_name": tag,
+                    "latest_version": version_match.group(0) if version_match else tag,
+                    "name": title,
+                    "body": _html_to_text(str(release.get("body") or "")),
+                    "html_url": str(release.get("html_url") or RELEASES_URL),
+                    "published_at": updated,
+                    "created_at": str(release.get("created_at") or updated),
+                    "prerelease": False,
+                    "assets": [],
+                    "source": "github_latest_api",
+                }
+            ]
+        except Exception:
+            # Keep the public Atom feed as a compatibility fallback for
+            # transient API limits or older installations.
+            pass
+
     payload, _headers, _status = _http_get(FEED_URL, accept="application/atom+xml, application/xml;q=0.9, */*;q=0.1")
     root = ET.fromstring(payload)
     releases: List[Dict[str, Any]] = []
@@ -459,34 +497,17 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
 
     current = get_current_version()
     state = load_state()
-    # Prefer the file-level path only when its manifest belongs to this
-    # release train. Otherwise continue to the public EXE Release check.
+    system_result: Optional[Dict[str, Any]] = None
+    # The GitHub latest stable release is the central source of truth. Keep
+    # the file-level manifest only as a fallback when GitHub is unavailable.
     try:
         from neto_system_updater import check_for_updates as check_system_updates
 
         system_result = check_system_updates(force=force)
-        if system_result.get("manifest_ok"):
-            system_latest = _comparison_version_tuple(system_result.get("latest_version"))
-            current_tuple = _comparison_version_tuple(current)
-            # Use the file-level path only for the current release train. A
-            # stale manifest must not hide a newer GitHub executable release.
-            if system_result.get("available") or (
-                system_latest and current_tuple and system_latest >= current_tuple
-            ):
-                state["last_check_at"] = int(now)
-                state["last_error"] = ""
-                save_state(state)
-                with _CACHE_LOCK:
-                    _CACHE["at"] = now
-                    _CACHE["result"] = dict(system_result)
-                return system_result
-        # If the file-level manifest is stale or unavailable, continue with
-        # the public Release check instead of hiding a newer EXE release.
     except Exception:
-        # A manifest failure should not block the public Release check.
-        pass
+        system_result = None
     try:
-        releases = _fetch_releases()
+        releases = _fetch_releases(include_prerelease=include_prerelease)
         candidates = [release for release in releases if include_prerelease or not release.get("prerelease")]
         if not candidates:
             raise RuntimeError("Seçilen yayın kanalında sürüm bulunamadı.")
@@ -512,6 +533,7 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
         release.update(
             {
                 "ok": True,
+                "update_mode": "exe",
                 "available": available,
                 "update_available": available,
                 "is_available": available,
@@ -545,7 +567,23 @@ def check_for_updates(force: bool = False, include_prerelease: bool = False, **_
             _CACHE["result"] = dict(release)
         return release
     except Exception as exc:
+        if isinstance(system_result, dict) and system_result.get("manifest_ok"):
+            system_latest = _comparison_version_tuple(system_result.get("latest_version"))
+            current_tuple = _comparison_version_tuple(current)
+            if system_result.get("available") or (
+                system_latest and current_tuple and system_latest >= current_tuple
+            ):
+                fallback = dict(system_result)
+                fallback["central_fallback"] = True
+                state["last_check_at"] = int(now)
+                state["last_error"] = str(exc)
+                save_state(state)
+                with _CACHE_LOCK:
+                    _CACHE["at"] = now
+                    _CACHE["result"] = dict(fallback)
+                return fallback
         result = {
+            "ok": False,
             "available": False,
             "update_available": False,
             "is_available": False,

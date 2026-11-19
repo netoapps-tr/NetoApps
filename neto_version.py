@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_VERSION = "1.53.1"
+APP_VERSION = "1.54.0"
 APP_CHANNEL = "stable"
 RELEASE_NAME = "NetOps One"
 RELEASE_TAG = f"v{APP_VERSION}"
@@ -17,7 +17,7 @@ RELEASE_REPOSITORY = "https://github.com/netoapps-tr/NetoApps"
 RELEASE_HIGHLIGHTS = (
     "QEMU tabanlı, kaynak sınırları korunan sanal masaüstü temeli",
     "NetOps içinden sanal masaüstü başlatma, durum ve güvenli durdurma komutları",
-    "Telefon/Android bağlantısından bağımsız PC odaklı 1.53.1 çekirdeği",
+    "Telefon/Android bağlantısından bağımsız PC odaklı 1.54 merkezi güncelleme çekirdeği",
     "Dahili Now Playing ve Now Playing Atmosferi",
     "Kasma azaltılmış, kapanmış widget korumalı animasyon motoru",
     "Sistem ayarlarında hızlı açılış ve arka plan kontrolleri",
@@ -43,7 +43,7 @@ def get_app_version() -> str:
     env_value = _clean_version(os.environ.get("NETO_APP_VERSION"))
     if env_value:
         return env_value
-    return _clean_version(APP_VERSION) or "1.53.1"
+    return _clean_version(APP_VERSION) or "1.54.0"
 
 
 def write_installed_version(value: object) -> str:

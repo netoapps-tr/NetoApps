@@ -103,8 +103,8 @@ def native_animation_contract() -> dict[str, int]:
 def native_brand_contract() -> dict[str, str]:
     return {
         "app_name": "NetOps",
-        "version": "1.53.1",
-        "window_title": "NetOps 1.53.1",
+        "version": "1.54.0",
+        "window_title": "NetOps 1.54.0",
         "logo_file": "Logo.png",
     }
 
@@ -2623,7 +2623,7 @@ class NetOpsQtWindow(QMainWindow):
 
     def _settings_about_tab(self) -> QWidget:
         page, layout = self._settings_tab("Hakkında", "NetOps native masaüstü arayüzü.")
-        layout.addWidget(QLabel("NetOps v1.53.1"))
+        layout.addWidget(QLabel("NetOps v1.54.0"))
         layout.addWidget(QLabel("PySide6 Qt Widgets tabanı"))
         layout.addWidget(QLabel(str(Path(__file__).resolve().parent)))
         layout.addStretch(1)

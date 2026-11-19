@@ -17,11 +17,11 @@ if str(PROJECT) not in sys.path:
 
 
 class SourceInvariantTests(unittest.TestCase):
-    def test_release_source_is_1_53(self) -> None:
+    def test_release_source_is_1_54(self) -> None:
         from neto_version import APP_VERSION, RELEASE_TAG
 
-        self.assertEqual(APP_VERSION, "1.53.1")
-        self.assertEqual(RELEASE_TAG, "v1.53.1")
+        self.assertEqual(APP_VERSION, "1.54.0")
+        self.assertEqual(RELEASE_TAG, "v1.54.0")
 
     def test_titlebar_uses_asynchronous_windows_message(self) -> None:
         source = (PROJECT / "asistan beta.py").read_text(encoding="utf-8-sig")
@@ -168,6 +168,74 @@ class RuntimeUnitTests(unittest.TestCase):
 
 
 class UpdaterHardeningTests(unittest.TestCase):
+    def test_central_latest_release_endpoint_returns_one_stable_release(self) -> None:
+        import neto_updater
+
+        payload = {
+            "id": 1531,
+            "tag_name": "v1.53.1",
+            "name": "NetOps 1.53.1",
+            "body": "Merkezi güncelleme",
+            "html_url": "https://github.com/netoapps-tr/NetoApps/releases/tag/v1.53.1",
+            "published_at": "2026-11-19T14:32:51Z",
+            "prerelease": False,
+            "draft": False,
+        }
+        with patch.object(
+            neto_updater,
+            "_http_get",
+            return_value=(json.dumps(payload).encode("utf-8"), {}, 200),
+        ) as http_get:
+            releases = neto_updater._fetch_releases()
+
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]["latest_version"], "1.53.1")
+        self.assertEqual(releases[0]["source"], "github_latest_api")
+        self.assertEqual(http_get.call_args.args[0], neto_updater.LATEST_RELEASE_API_URL)
+
+    def test_central_github_release_wins_over_system_manifest(self) -> None:
+        import neto_updater
+
+        system_result = {
+            "ok": True,
+            "manifest_ok": True,
+            "available": True,
+            "update_available": True,
+            "is_available": True,
+            "update_mode": "system_files",
+            "current_version": "1.53.1",
+            "latest_version": "1.53.1",
+            "system_files": [{"path": "neto_updater.py"}],
+        }
+        release = {
+            "release_id": "release-154",
+            "id": "release-154",
+            "tag_name": "v1.54.0",
+            "latest_version": "1.54.0",
+            "name": "NetOps 1.54",
+            "body": "Yeni merkez sürüm",
+            "html_url": "https://github.com/netoapps-tr/NetoApps/releases/tag/v1.54.0",
+            "prerelease": False,
+        }
+        asset = {
+            "id": "asset-154",
+            "name": "NetOps-1.54.exe",
+            "browser_download_url": "https://github.com/netoapps-tr/NetoApps/releases/download/v1.54/NetOps-1.54.exe",
+            "size": 10,
+            "content_type": "application/vnd.microsoft.portable-executable",
+            "digest": "sha256:" + "b" * 64,
+        }
+        with patch.dict(neto_updater._CACHE, {"at": 0.0, "result": None}), patch(
+            "neto_system_updater.check_for_updates", return_value=system_result
+        ), patch.object(neto_updater, "get_current_version", return_value="1.53.1"), patch.object(
+            neto_updater, "_fetch_releases", return_value=[release]
+        ), patch.object(neto_updater, "_fetch_assets", return_value=[asset]):
+            result = neto_updater.check_for_updates(force=True)
+
+        self.assertEqual(result["latest_version"], "1.54.0")
+        self.assertEqual(result["update_mode"], "exe")
+        self.assertTrue(result["available"])
+
     def test_system_manifest_never_offers_an_older_version(self) -> None:
         import neto_system_updater as updater
 

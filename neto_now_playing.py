@@ -287,7 +287,7 @@ def _pick_cover_url(results, title="", artist="", album=""):
 
 
 def _cover_lookup_json(url):
-    request = Request(url, headers={"User-Agent": "NetOps/1.53 (Now Playing)"})
+    request = Request(url, headers={"User-Agent": "NetOps/1.54 (Now Playing)"})
     with urlopen(request, timeout=4.0) as response:
         payload = response.read(1_500_000)
     return json.loads(payload.decode("utf-8", errors="replace"))
@@ -296,7 +296,7 @@ def _cover_lookup_json(url):
 def _save_remote_cover(url, title="", artist=""):
     if not str(url or "").startswith("https://"):
         return ""
-    request = Request(url, headers={"User-Agent": "NetOps/1.53 (Now Playing)"})
+    request = Request(url, headers={"User-Agent": "NetOps/1.54 (Now Playing)"})
     with urlopen(request, timeout=5.0) as response:
         data = response.read(8_000_000)
     if len(data) < 500:
