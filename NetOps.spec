@@ -55,8 +55,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='NetOps',
     debug=False,
     bootloader_ignore_signals=False,
@@ -65,17 +66,9 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
+    runtime_tmpdir=".",
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=['NetoAsistan.ico'],
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='NetOps',
 )

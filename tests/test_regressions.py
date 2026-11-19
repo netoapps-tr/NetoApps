@@ -72,6 +72,14 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("pyinstaller==6.22.1", source)
         self.assertIn("shazamio==0.8.1", source)
 
+    def test_release_spec_builds_a_single_self_contained_exe(self) -> None:
+        source = (PROJECT / "NetOps.spec").read_text(encoding="utf-8-sig")
+        self.assertIn("a.binaries,", source)
+        self.assertIn("a.datas,", source)
+        self.assertNotIn("exclude_binaries=True", source)
+        self.assertNotIn("COLLECT(", source)
+        self.assertIn('runtime_tmpdir="."', source)
+
     def test_update_defaults_to_stable_channel(self) -> None:
         import neto_updater
         import neto_update_ui
